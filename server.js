@@ -11,6 +11,14 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// 4. ตั้งค่าส่วนกลาง (Global Configuration)
+const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง Spreadsheet ID ของคุณที่นี่ที่เดียว
+
+// ดึงข้อมูล credentials จาก Environment Variable ที่ตั้งค่าไว้บน Render
+// และแปลง (parse) จาก String กลับมาเป็น Object JSON
+const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
+
+
 // ===============================================
 //               API Endpoints
 // ===============================================
@@ -21,12 +29,11 @@ app.use(express.json());
 app.get('/api/menu', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
-            keyFile: 'credentials.json',
+            credentials, // <== ใช้วิธีใหม่
             scopes: 'https://www.googleapis.com/auth/spreadsheets.readonly',
         });
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
-        const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง ID ของคุณ
 
         const [menuResponse, optionsResponse] = await Promise.all([
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' }),
@@ -86,12 +93,11 @@ app.post('/api/orders', async (req, res) => {
     const { cart, total, tableNumber } = req.body;
     try {
         const auth = new google.auth.GoogleAuth({
-            keyFile: 'credentials.json',
+            credentials, // <== ใช้วิธีใหม่
             scopes: 'https://www.googleapis.com/auth/spreadsheets',
         });
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
-        const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง ID ของคุณ
 
         const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
         const itemsJsonString = JSON.stringify(cart);
@@ -117,12 +123,11 @@ app.post('/api/orders', async (req, res) => {
 app.get('/api/get-orders', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
-            keyFile: 'credentials.json',
-            scopes: 'https://www.googleapis.com/auth/spreadsheets', // <== แก้ไข
+            credentials, // <== ใช้วิธีใหม่
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
         });
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
-        const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง ID ของคุณ
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
@@ -171,12 +176,11 @@ app.post('/api/update-status', async (req, res) => {
     }
     try {
         const auth = new google.auth.GoogleAuth({
-            keyFile: 'credentials.json',
+            credentials, // <== ใช้วิธีใหม่
             scopes: 'https://www.googleapis.com/auth/spreadsheets',
         });
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
-        const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง ID ของคุณ
 
         await sheets.spreadsheets.values.update({
             spreadsheetId,
@@ -198,12 +202,11 @@ app.post('/api/update-status', async (req, res) => {
 app.get('/api/tables', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
-            keyFile: 'credentials.json',
-            scopes: 'https://www.googleapis.com/auth/spreadsheets', // <== แก้ไข
+            credentials, // <== ใช้วิธีใหม่
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
         });
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
-        const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง ID ของคุณ
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
@@ -267,12 +270,11 @@ app.post('/api/clear-table', async (req, res) => {
     }
     try {
         const auth = new google.auth.GoogleAuth({
-            keyFile: 'credentials.json',
+            credentials, // <== ใช้วิธีใหม่
             scopes: 'https://www.googleapis.com/auth/spreadsheets',
         });
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
-        const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง ID ของคุณ
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
