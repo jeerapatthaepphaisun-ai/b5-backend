@@ -246,6 +246,9 @@ app.get('/api/tables', async (req, res) => {
                 };
             }
             tablesData[tableName].orders.push(...order.items);
+            if (order.status && order.status.toLowerCase() === 'billing') {
+                tablesData[tableName].status = 'billing';
+            }
         });
 
         for(const tableName in tablesData) {
@@ -260,7 +263,7 @@ app.get('/api/tables', async (req, res) => {
 });
 
 /**
- * Endpoint สำหรับเคลียร์โต๊ะ (อัปเดตสถานะเป็น Paid)
+ * Endpoint สำหรับเคลียร์โต๊ะ
  */
 app.post('/api/clear-table', async (req, res) => {
     const { tableName } = req.body;
@@ -317,44 +320,59 @@ app.post('/api/clear-table', async (req, res) => {
 });
 
 /**
- * Endpoint สำหรับดึงข้อมูลหมวดหมู่อาหารทั้งหมด
+ * Endpoint สำหรับลูกค้ากดเรียกเก็บเงิน
  */
-app.get('/api/categories', async (req, res) => {
+app.post('/api/request-bill', async (req, res) => {
+    const { tableName } = req.body;
+    if (!tableName) {
+        return res.status(400).json({ status: 'error', message: 'Missing tableName' });
+    }
     try {
         const auth = new google.auth.GoogleAuth({
             credentials,
-            scopes: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
         });
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Food Menu!G2:H',
+            range: 'Orders!A:E',
         });
 
         const rows = response.data.values;
-        if (!rows || rows.length === 0) {
-            return res.json({ status: 'success', data: [] });
+        if (!rows || rows.length <= 1) {
+            return res.status(404).json({ status: 'error', message: 'No orders found' });
         }
-        
-        const uniqueCategories = [];
-        const seenCategories = new Set();
 
-        rows.forEach(row => {
-            const category_th = row[0];
-            const category_en = row[1];
-            if (category_th && !seenCategories.has(category_th)) {
-                seenCategories.add(category_th);
-                uniqueCategories.push({ category_th, category_en });
+        rows.shift();
+        const requests = [];
+        
+        rows.forEach((row, index) => {
+            const currentTable = row[1];
+            const currentStatus = row[4];
+            if (currentTable === tableName && currentStatus && currentStatus.toLowerCase() !== 'paid') {
+                requests.push({
+                    range: `Orders!E${index + 2}`,
+                    values: [['Billing']]
+                });
             }
         });
-
-        res.json({ status: 'success', data: uniqueCategories });
-
+        
+        if (requests.length > 0) {
+            await sheets.spreadsheets.values.batchUpdate({
+                spreadsheetId,
+                resource: {
+                    valueInputOption: 'USER_ENTERED',
+                    data: requests
+                }
+            });
+        }
+        
+        res.json({ status: 'success', message: `Table ${tableName} requested for billing.` });
     } catch (error) {
-        console.error('API /categories error:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
+        console.error('API /request-bill error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to request bill.' });
     }
 });
 
