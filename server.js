@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 // 4. ตั้งค่าส่วนกลาง (Global Configuration)
-const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง Spreadsheet ID ของคุณที่นี่ที่เดียว
+const spreadsheetId = 'YOUR_SPREADSHEET_ID'; // <== วาง Spreadsheet ID ของคุณที่นี่ที่เดียว
 
 // ดึงข้อมูล credentials จาก Environment Variable
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
@@ -246,7 +246,12 @@ app.get('/api/tables', async (req, res) => {
                 };
             }
             tablesData[tableName].orders.push(...order.items);
-            if (order.status && order.status.toLowerCase() === 'billing') {
+        });
+        
+        // หลังจากรวมข้อมูลทั้งหมดแล้ว ค่อยมาเช็คสถานะ Billing อีกครั้ง
+        activeOrders.forEach(order => {
+            const tableName = order.table;
+            if (tablesData[tableName] && order.status && order.status.toLowerCase() === 'billing') {
                 tablesData[tableName].status = 'billing';
             }
         });
@@ -256,6 +261,7 @@ app.get('/api/tables', async (req, res) => {
         }
 
         res.json({ status: 'success', data: tablesData });
+
     } catch (error) {
         console.error('API /tables error:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch table statuses.' });
@@ -351,7 +357,7 @@ app.post('/api/request-bill', async (req, res) => {
         rows.forEach((row, index) => {
             const currentTable = row[1];
             const currentStatus = row[4];
-            if (currentTable === tableName && currentStatus && currentStatus.toLowerCase() !== 'paid') {
+            if (currentTable === tableName && currentStatus && currentStatus.toLowerCase() !== 'paid' && currentStatus.toLowerCase() !== 'billing') {
                 requests.push({
                     range: `Orders!E${index + 2}`,
                     values: [['Billing']]
@@ -375,6 +381,50 @@ app.post('/api/request-bill', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to request bill.' });
     }
 });
+
+
+/**
+ * Endpoint สำหรับดึงข้อมูลหมวดหมู่อาหารทั้งหมด
+ */
+app.get('/api/categories', async (req, res) => {
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Food Menu!G2:H',
+        });
+
+        const rows = response.data.values;
+        if (!rows || rows.length === 0) {
+            return res.json({ status: 'success', data: [] });
+        }
+        
+        const uniqueCategories = [];
+        const seenCategories = new Set();
+
+        rows.forEach(row => {
+            const category_th = row[0];
+            const category_en = row[1];
+            if (category_th && !seenCategories.has(category_th)) {
+                seenCategories.add(category_th);
+                uniqueCategories.push({ category_th, category_en });
+            }
+        });
+
+        res.json({ status: 'success', data: uniqueCategories });
+
+    } catch (error) {
+        console.error('API /categories error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
+    }
+});
+
 
 // 5. เริ่มการทำงานของ Server
 app.listen(PORT, () => {
