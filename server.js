@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 // 4. ตั้งค่าส่วนกลาง (Global Configuration)
-const spreadsheetId = 'YOUR_SPREADSHEET_ID'; // <== วาง Spreadsheet ID ของคุณที่นี่ที่เดียว
+const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง Spreadsheet ID ของคุณที่นี่ที่เดียว
 
 // ดึงข้อมูล credentials จาก Environment Variable
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
