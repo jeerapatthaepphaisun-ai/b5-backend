@@ -156,7 +156,13 @@ app.get('/api/get-orders', async (req, res) => {
             return order;
         });
 
-        const pendingOrders = orders.filter(order => order.status && order.status.toLowerCase() !== 'completed' && order.status.toLowerCase() !== 'paid');
+        // กรองออเดอร์ที่เสร็จแล้ว (Completed), จ่ายเงินแล้ว (Paid), หรือกำลังเรียกเก็บเงิน (Billing) ออกไป
+        const pendingOrders = orders.filter(order => 
+            order.status && 
+            order.status.toLowerCase() !== 'completed' && 
+            order.status.toLowerCase() !== 'paid' &&
+            order.status.toLowerCase() !== 'billing'
+        );
         res.json({ status: 'success', data: pendingOrders });
 
     } catch (error) {
@@ -248,7 +254,6 @@ app.get('/api/tables', async (req, res) => {
             tablesData[tableName].orders.push(...order.items);
         });
         
-        // หลังจากรวมข้อมูลทั้งหมดแล้ว ค่อยมาเช็คสถานะ Billing อีกครั้ง
         activeOrders.forEach(order => {
             const tableName = order.table;
             if (tablesData[tableName] && order.status && order.status.toLowerCase() === 'billing') {
@@ -381,7 +386,6 @@ app.post('/api/request-bill', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to request bill.' });
     }
 });
-
 
 /**
  * Endpoint สำหรับดึงข้อมูลหมวดหมู่อาหารทั้งหมด
