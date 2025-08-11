@@ -429,6 +429,52 @@ app.get('/api/categories', async (req, res) => {
 });
 
 
+/**
+ * Endpoint สำหรับให้ลูกค้าตรวจสอบสถานะออเดอร์ล่าสุดของโต๊ะตัวเอง
+ */
+app.get('/api/order-status', async (req, res) => {
+    const { table } = req.query;
+    if (!table) {
+        return res.status(400).json({ status: 'error', message: 'Table number is required' });
+    }
+
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Orders!B:F',
+        });
+        
+        const rows = response.data.values;
+        if (!rows || rows.length <= 1) {
+            return res.json({ status: 'success', data: { status: 'No order found' } });
+        }
+        
+        rows.shift();
+
+        const tableOrders = rows.filter(row => row[0] === table && row[4] && row[4].toLowerCase() !== 'paid');
+        
+        if (tableOrders.length > 0) {
+            const latestOrder = tableOrders[tableOrders.length - 1];
+            const status = latestOrder[4];
+            res.json({ status: 'success', data: { status: status } });
+        } else {
+            res.json({ status: 'success', data: { status: 'No active order' } });
+        }
+
+    } catch (error) {
+        console.error('API /order-status error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch order status.' });
+    }
+});
+
+
 // 5. เริ่มการทำงานของ Server
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
