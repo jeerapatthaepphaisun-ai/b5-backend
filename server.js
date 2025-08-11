@@ -156,7 +156,6 @@ app.get('/api/get-orders', async (req, res) => {
             return order;
         });
 
-        // กรองออเดอร์ที่เสร็จแล้ว (Completed), จ่ายเงินแล้ว (Paid), หรือกำลังเรียกเก็บเงิน (Billing) ออกไป
         const pendingOrders = orders.filter(order => 
             order.status && 
             order.status.toLowerCase() !== 'completed' && 
