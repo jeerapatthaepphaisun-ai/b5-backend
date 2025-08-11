@@ -89,7 +89,7 @@ app.get('/api/menu', async (req, res) => {
  * Endpoint สำหรับรับและบันทึกคำสั่งซื้อใหม่
  */
 app.post('/api/orders', async (req, res) => {
-    const { cart, total, tableNumber } = req.body;
+    const { cart, total, tableNumber, specialRequest } = req.body; // <== เพิ่ม specialRequest
     try {
         const auth = new google.auth.GoogleAuth({
             credentials,
@@ -100,11 +100,12 @@ app.post('/api/orders', async (req, res) => {
 
         const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
         const itemsJsonString = JSON.stringify(cart);
-        const newRow = [ timestamp, tableNumber || 'N/A', itemsJsonString, total, 'Pending' ];
+        // เพิ่ม specialRequest เข้าไปในแถวข้อมูลใหม่
+        const newRow = [ timestamp, tableNumber || 'N/A', itemsJsonString, total, specialRequest || '', 'Pending' ];
 
         await sheets.spreadsheets.values.append({
             spreadsheetId,
-            range: 'Orders!A:E',
+            range: 'Orders!A:F', // <== ขยาย range เป็น A:F
             valueInputOption: 'USER_ENTERED',
             resource: { values: [newRow] },
         });
@@ -130,7 +131,7 @@ app.get('/api/get-orders', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:E',
+            range: 'Orders!A:F', // <== ขยาย range
         });
 
         const rows = response.data.values;
@@ -139,7 +140,7 @@ app.get('/api/get-orders', async (req, res) => {
         }
 
         rows.shift();
-        const headers = ['timestamp', 'table', 'items', 'total', 'status'];
+        const headers = ['timestamp', 'table', 'items', 'total', 'special_request', 'status'];
         
         const orders = rows.map((row, index) => {
             const order = {};
@@ -188,7 +189,7 @@ app.post('/api/update-status', async (req, res) => {
 
         await sheets.spreadsheets.values.update({
             spreadsheetId,
-            range: `Orders!E${rowNumber}`,
+            range: `Orders!F${rowNumber}`, // <== เปลี่ยนเป็นคอลัมน์ F
             valueInputOption: 'USER_ENTERED',
             resource: { values: [[newStatus]] },
         });
@@ -214,7 +215,7 @@ app.get('/api/tables', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:E',
+            range: 'Orders!A:F', // <== ขยาย range
         });
 
         const rows = response.data.values;
@@ -223,7 +224,7 @@ app.get('/api/tables', async (req, res) => {
         }
 
         rows.shift();
-        const headers = ['timestamp', 'table', 'items', 'total', 'status'];
+        const headers = ['timestamp', 'table', 'items', 'total', 'special_request', 'status'];
         const orders = rows.map((row, index) => {
             const order = {};
             headers.forEach((header, i) => {
@@ -290,7 +291,7 @@ app.post('/api/clear-table', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:E',
+            range: 'Orders!A:F', // <== ขยาย range
         });
 
         const rows = response.data.values;
@@ -303,10 +304,10 @@ app.post('/api/clear-table', async (req, res) => {
         
         rows.forEach((row, index) => {
             const currentTable = row[1];
-            const currentStatus = row[4];
+            const currentStatus = row[5]; // <== เปลี่ยนเป็นคอลัมน์ F
             if (currentTable === tableName && currentStatus && currentStatus.toLowerCase() !== 'paid') {
                 requests.push({
-                    range: `Orders!E${index + 2}`,
+                    range: `Orders!F${index + 2}`, // <== เปลี่ยนเป็นคอลัมน์ F
                     values: [['Paid']]
                 });
             }
@@ -347,7 +348,7 @@ app.post('/api/request-bill', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:E',
+            range: 'Orders!A:F', // <== ขยาย range
         });
 
         const rows = response.data.values;
@@ -360,10 +361,10 @@ app.post('/api/request-bill', async (req, res) => {
         
         rows.forEach((row, index) => {
             const currentTable = row[1];
-            const currentStatus = row[4];
+            const currentStatus = row[5]; // <== เปลี่ยนเป็นคอลัมน์ F
             if (currentTable === tableName && currentStatus && currentStatus.toLowerCase() !== 'paid' && currentStatus.toLowerCase() !== 'billing') {
                 requests.push({
-                    range: `Orders!E${index + 2}`,
+                    range: `Orders!F${index + 2}`, // <== เปลี่ยนเป็นคอลัมน์ F
                     values: [['Billing']]
                 });
             }
