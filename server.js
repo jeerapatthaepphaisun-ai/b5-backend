@@ -89,7 +89,7 @@ app.get('/api/menu', async (req, res) => {
  * Endpoint สำหรับรับและบันทึกคำสั่งซื้อใหม่
  */
 app.post('/api/orders', async (req, res) => {
-    const { cart, total, tableNumber, specialRequest } = req.body; // <== เพิ่ม specialRequest
+    const { cart, total, tableNumber, specialRequest } = req.body;
     try {
         const auth = new google.auth.GoogleAuth({
             credentials,
@@ -100,12 +100,11 @@ app.post('/api/orders', async (req, res) => {
 
         const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
         const itemsJsonString = JSON.stringify(cart);
-        // เพิ่ม specialRequest เข้าไปในแถวข้อมูลใหม่
         const newRow = [ timestamp, tableNumber || 'N/A', itemsJsonString, total, specialRequest || '', 'Pending' ];
 
         await sheets.spreadsheets.values.append({
             spreadsheetId,
-            range: 'Orders!A:F', // <== ขยาย range เป็น A:F
+            range: 'Orders!A:F',
             valueInputOption: 'USER_ENTERED',
             resource: { values: [newRow] },
         });
@@ -131,7 +130,7 @@ app.get('/api/get-orders', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:F', // <== ขยาย range
+            range: 'Orders!A:F',
         });
 
         const rows = response.data.values;
@@ -189,7 +188,7 @@ app.post('/api/update-status', async (req, res) => {
 
         await sheets.spreadsheets.values.update({
             spreadsheetId,
-            range: `Orders!F${rowNumber}`, // <== เปลี่ยนเป็นคอลัมน์ F
+            range: `Orders!F${rowNumber}`,
             valueInputOption: 'USER_ENTERED',
             resource: { values: [[newStatus]] },
         });
@@ -215,7 +214,7 @@ app.get('/api/tables', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:F', // <== ขยาย range
+            range: 'Orders!A:F',
         });
 
         const rows = response.data.values;
@@ -291,7 +290,7 @@ app.post('/api/clear-table', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:F', // <== ขยาย range
+            range: 'Orders!A:F',
         });
 
         const rows = response.data.values;
@@ -304,10 +303,10 @@ app.post('/api/clear-table', async (req, res) => {
         
         rows.forEach((row, index) => {
             const currentTable = row[1];
-            const currentStatus = row[5]; // <== เปลี่ยนเป็นคอลัมน์ F
+            const currentStatus = row[5];
             if (currentTable === tableName && currentStatus && currentStatus.toLowerCase() !== 'paid') {
                 requests.push({
-                    range: `Orders!F${index + 2}`, // <== เปลี่ยนเป็นคอลัมน์ F
+                    range: `Orders!F${index + 2}`,
                     values: [['Paid']]
                 });
             }
@@ -348,7 +347,7 @@ app.post('/api/request-bill', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:F', // <== ขยาย range
+            range: 'Orders!A:F',
         });
 
         const rows = response.data.values;
@@ -361,10 +360,10 @@ app.post('/api/request-bill', async (req, res) => {
         
         rows.forEach((row, index) => {
             const currentTable = row[1];
-            const currentStatus = row[5]; // <== เปลี่ยนเป็นคอลัมน์ F
+            const currentStatus = row[5];
             if (currentTable === tableName && currentStatus && currentStatus.toLowerCase() !== 'paid' && currentStatus.toLowerCase() !== 'billing') {
                 requests.push({
-                    range: `Orders!F${index + 2}`, // <== เปลี่ยนเป็นคอลัมน์ F
+                    range: `Orders!F${index + 2}`,
                     values: [['Billing']]
                 });
             }
