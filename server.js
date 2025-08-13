@@ -23,6 +23,13 @@ const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 // ===============================================
 
 /**
+ * Endpoint สำหรับ Health Check
+ */
+app.get('/', (req, res) => {
+  res.status(200).send('B5 Restaurant Backend is running!');
+});
+
+/**
  * Endpoint สำหรับดึงข้อมูลเมนูอาหารทั้งหมด
  */
 app.get('/api/menu', async (req, res) => {
@@ -430,7 +437,7 @@ app.get('/api/categories', async (req, res) => {
 
 
 /**
- * Endpoint สำหรับให้ลูกค้าตรวจสอบสถานะออเดอร์ล่าสุดของโต๊ะตัวเอง (ฉบับปรับปรุง)
+ * Endpoint สำหรับให้ลูกค้าตรวจสอบสถานะออเดอร์ (ฉบับอัปเกรดเพื่อ Panel ใหม่)
  */
 app.get('/api/order-status', async (req, res) => {
     const { table } = req.query;
@@ -448,15 +455,15 @@ app.get('/api/order-status', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:F', // ดึงข้อมูลมาทั้งหมดเพื่อความยืดหยุ่น
+            range: 'Orders!A:F',
         });
         
         const rows = response.data.values;
         if (!rows || rows.length <= 1) {
-            return res.json({ status: 'success', data: [] }); // ส่ง Array ว่างกลับไป
+            return res.json({ status: 'success', data: [] });
         }
         
-        rows.shift(); // เอาหัวตารางออก
+        rows.shift();
 
         const activeOrders = rows
             .map((row, index) => ({
@@ -474,40 +481,30 @@ app.get('/api/order-status', async (req, res) => {
             );
 
         if (activeOrders.length > 0) {
-            // แปลง JSON string ของรายการอาหารให้ใช้งานง่ายขึ้น
             const ordersWithDetails = activeOrders.map(order => {
-                let itemsSummary = 'รายการอาหาร';
+                let items = [];
                 try {
-                    const items = JSON.parse(order.itemsJson);
-                    if (items.length > 0) {
-                        // แสดงชื่ออาหารรายการแรก + "และอื่นๆ" ถ้ามีมากกว่า 1
-                        itemsSummary = items[0].name_th + (items.length > 1 ? ' และอื่นๆ' : '');
-                    }
+                    // ส่งรายการอาหารทั้งหมดกลับไปเลย
+                    items = JSON.parse(order.itemsJson);
                 } catch(e) {
-                    itemsSummary = "ไม่สามารถอ่านรายการได้";
+                    // Do nothing
                 }
                 return {
                     id: order.rowNumber,
-                    summary: itemsSummary,
+                    timestamp: order.timestamp,
+                    items: items, // ส่งเป็น array กลับไป
                     status: order.status
                 };
             });
             res.json({ status: 'success', data: ordersWithDetails });
         } else {
-            res.json({ status: 'success', data: [] }); // ถ้าไม่มี ก็ส่ง Array ว่าง
+            res.json({ status: 'success', data: [] });
         }
 
     } catch (error) {
         console.error('API /order-status error:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch order status.' });
     }
-});
-
-/**
- * Endpoint สำหรับ Health Check
- */
-app.get('/', (req, res) => {
-  res.status(200).send('B5 Restaurant Backend is running!');
 });
 
 
