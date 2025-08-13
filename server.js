@@ -503,6 +503,13 @@ app.get('/api/order-status', async (req, res) => {
     }
 });
 
+/**
+ * Endpoint สำหรับ Health Check
+ */
+app.get('/', (req, res) => {
+  res.status(200).send('B5 Restaurant Backend is running!');
+});
+
 
 // 5. เริ่มการทำงานของ Server
 app.listen(PORT, () => {
