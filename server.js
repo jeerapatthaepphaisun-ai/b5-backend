@@ -430,7 +430,7 @@ app.get('/api/categories', async (req, res) => {
 
 
 /**
- * Endpoint สำหรับให้ลูกค้าตรวจสอบสถานะออเดอร์ล่าสุดของโต๊ะตัวเอง
+ * Endpoint สำหรับให้ลูกค้าตรวจสอบสถานะออเดอร์ล่าสุดของโต๊ะตัวเอง (ฉบับปรับปรุง)
  */
 app.get('/api/order-status', async (req, res) => {
     const { table } = req.query;
@@ -448,24 +448,53 @@ app.get('/api/order-status', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!B:F',
+            range: 'Orders!A:F', // ดึงข้อมูลมาทั้งหมดเพื่อความยืดหยุ่น
         });
         
         const rows = response.data.values;
         if (!rows || rows.length <= 1) {
-            return res.json({ status: 'success', data: { status: 'No order found' } });
+            return res.json({ status: 'success', data: [] }); // ส่ง Array ว่างกลับไป
         }
         
-        rows.shift();
+        rows.shift(); // เอาหัวตารางออก
 
-        const tableOrders = rows.filter(row => row[0] === table && row[4] && row[4].toLowerCase() !== 'paid');
-        
-        if (tableOrders.length > 0) {
-            const latestOrder = tableOrders[tableOrders.length - 1];
-            const status = latestOrder[4];
-            res.json({ status: 'success', data: { status: status } });
+        const activeOrders = rows
+            .map((row, index) => ({
+                rowNumber: index + 2,
+                timestamp: row[0],
+                tableName: row[1],
+                itemsJson: row[2],
+                status: row[5]
+            }))
+            .filter(order => 
+                order.tableName === table &&
+                order.status &&
+                order.status.toLowerCase() !== 'paid' &&
+                order.status.toLowerCase() !== 'completed'
+            );
+
+        if (activeOrders.length > 0) {
+            // แปลง JSON string ของรายการอาหารให้ใช้งานง่ายขึ้น
+            const ordersWithDetails = activeOrders.map(order => {
+                let itemsSummary = 'รายการอาหาร';
+                try {
+                    const items = JSON.parse(order.itemsJson);
+                    if (items.length > 0) {
+                        // แสดงชื่ออาหารรายการแรก + "และอื่นๆ" ถ้ามีมากกว่า 1
+                        itemsSummary = items[0].name_th + (items.length > 1 ? ' และอื่นๆ' : '');
+                    }
+                } catch(e) {
+                    itemsSummary = "ไม่สามารถอ่านรายการได้";
+                }
+                return {
+                    id: order.rowNumber,
+                    summary: itemsSummary,
+                    status: order.status
+                };
+            });
+            res.json({ status: 'success', data: ordersWithDetails });
         } else {
-            res.json({ status: 'success', data: { status: 'No active order' } });
+            res.json({ status: 'success', data: [] }); // ถ้าไม่มี ก็ส่ง Array ว่าง
         }
 
     } catch (error) {
