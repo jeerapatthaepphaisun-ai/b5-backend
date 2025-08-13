@@ -2,9 +2,12 @@
 const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
+const http = require('http'); // << เพิ่มเข้ามา
+const { WebSocketServer } = require('ws'); // << เพิ่มเข้ามา
 
 // 2. ตั้งค่า Express Server
 const app = express();
+const server = http.createServer(app); // << สร้าง http server จาก express app
 const PORT = process.env.PORT || 3000;
 
 // 3. ใช้ Middleware
@@ -13,9 +16,37 @@ app.use(express.json());
 
 // 4. ตั้งค่าส่วนกลาง (Global Configuration)
 const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw'; // <== วาง Spreadsheet ID ของคุณที่นี่ที่เดียว
-
-// ดึงข้อมูล credentials จาก Environment Variable
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
+
+// ===============================================
+//         WebSocket Server Setup (เพิ่มใหม่ทั้งหมด)
+// ===============================================
+const wss = new WebSocketServer({ server });
+const clients = new Set(); // ใช้ Set เพื่อเก็บ client ที่เชื่อมต่อทั้งหมด
+
+function broadcast(data) {
+    const message = JSON.stringify(data);
+    for (const client of clients) {
+        if (client.readyState === client.OPEN) {
+            client.send(message);
+        }
+    }
+}
+
+wss.on('connection', (ws) => {
+    console.log('KDS client connected');
+    clients.add(ws);
+
+    ws.on('close', () => {
+        console.log('KDS client disconnected');
+        clients.delete(ws);
+    });
+
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
+    });
+});
+// ===============================================
 
 
 // ===============================================
@@ -28,6 +59,69 @@ const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 app.get('/', (req, res) => {
   res.status(200).send('B5 Restaurant Backend is running!');
 });
+
+/**
+ * Endpoint สำหรับรับและบันทึกคำสั่งซื้อใหม่ (มีการแก้ไข)
+ */
+app.post('/api/orders', async (req, res) => {
+    const { cart, total, tableNumber, specialRequest } = req.body;
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+        const itemsJsonString = JSON.stringify(cart);
+        const newRow = [ timestamp, tableNumber || 'N/A', itemsJsonString, total, specialRequest || '', 'Pending' ];
+
+        const appendResult = await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: 'Orders!A:F',
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [newRow] },
+        });
+
+        // >> ส่วนที่เพิ่มเข้ามา: ส่งข้อมูลออเดอร์ใหม่ไปให้ KDS ทันที <<
+        const updatedRange = appendResult.data.updates.updatedRange;
+        const newRowNumber = parseInt(updatedRange.match(/\d+$/)[0], 10);
+        broadcast({
+            type: 'NEW_ORDER',
+            payload: {
+                rowNumber: newRowNumber,
+                timestamp: newRow[0],
+                table: newRow[1],
+                items: cart, // ส่งข้อมูล cart ไปตรงๆ
+                special_request: newRow[4],
+                status: newRow[5],
+            }
+        });
+        // >> จบส่วนที่เพิ่มเข้ามา <<
+
+        res.status(201).json({ status: 'success', message: 'Order created successfully!' });
+    } catch (error) {
+        console.error('API /orders error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to create order.' });
+    }
+});
+
+
+// (Endpoints อื่นๆ ที่เหลือให้คงเดิมไว้ทั้งหมด)
+// ... app.get('/api/menu', ...)
+// ... app.get('/api/get-orders', ...)
+// ... app.post('/api/update-status', ...)
+// ... app.get('/api/tables', ...)
+// ... app.post('/api/clear-table', ...)
+// ... app.post('/api/request-bill', ...)
+// ... app.get('/api/categories', ...)
+// ... app.get('/api/order-status', ...)
+
+// [คัดลอก Endpoints เดิมที่เหลือทั้งหมดมาวางต่อตรงนี้]
+// ... (ผมจะขอย่อไว้เพื่อไม่ให้ข้อความยาวเกินไป แต่ในไฟล์ของคุณต้องมีครบนะครับ)
+
+// (Endpoint เดิมทั้งหมดจากไฟล์ก่อนหน้า)
 
 /**
  * Endpoint สำหรับดึงข้อมูลเมนูอาหารทั้งหมด
@@ -89,37 +183,6 @@ app.get('/api/menu', async (req, res) => {
     } catch (error) {
         console.error('API /menu error: ' + error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
-    }
-});
-
-/**
- * Endpoint สำหรับรับและบันทึกคำสั่งซื้อใหม่
- */
-app.post('/api/orders', async (req, res) => {
-    const { cart, total, tableNumber, specialRequest } = req.body;
-    try {
-        const auth = new google.auth.GoogleAuth({
-            credentials,
-            scopes: 'https://www.googleapis.com/auth/spreadsheets',
-        });
-        const client = await auth.getClient();
-        const sheets = google.sheets({ version: 'v4', auth: client });
-
-        const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-        const itemsJsonString = JSON.stringify(cart);
-        const newRow = [ timestamp, tableNumber || 'N/A', itemsJsonString, total, specialRequest || '', 'Pending' ];
-
-        await sheets.spreadsheets.values.append({
-            spreadsheetId,
-            range: 'Orders!A:F',
-            valueInputOption: 'USER_ENTERED',
-            resource: { values: [newRow] },
-        });
-
-        res.status(201).json({ status: 'success', message: 'Order created successfully!' });
-    } catch (error) {
-        console.error('API /orders error:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to create order.' });
     }
 });
 
@@ -199,6 +262,16 @@ app.post('/api/update-status', async (req, res) => {
             valueInputOption: 'USER_ENTERED',
             resource: { values: [[newStatus]] },
         });
+        
+        // >> ส่วนที่เพิ่มเข้ามา: ส่งข้อมูลอัปเดตสถานะไปให้ KDS ทันที <<
+        broadcast({
+            type: 'STATUS_UPDATE',
+            payload: {
+                rowNumber: rowNumber,
+                newStatus: newStatus
+            }
+        });
+        // >> จบส่วนที่เพิ่มเข้ามา <<
 
         res.json({ status: 'success', message: `Order at row ${rowNumber} updated to ${newStatus}` });
     } catch (error) {
@@ -484,7 +557,6 @@ app.get('/api/order-status', async (req, res) => {
             const ordersWithDetails = activeOrders.map(order => {
                 let items = [];
                 try {
-                    // ส่งรายการอาหารทั้งหมดกลับไปเลย
                     items = JSON.parse(order.itemsJson);
                 } catch(e) {
                     // Do nothing
@@ -492,7 +564,7 @@ app.get('/api/order-status', async (req, res) => {
                 return {
                     id: order.rowNumber,
                     timestamp: order.timestamp,
-                    items: items, // ส่งเป็น array กลับไป
+                    items: items,
                     status: order.status
                 };
             });
@@ -508,7 +580,7 @@ app.get('/api/order-status', async (req, res) => {
 });
 
 
-// 5. เริ่มการทำงานของ Server
-app.listen(PORT, () => {
+// 5. เริ่มการทำงานของ Server (มีการแก้ไข)
+server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
