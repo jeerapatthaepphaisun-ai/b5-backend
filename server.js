@@ -51,6 +51,58 @@ app.get('/', (req, res) => {
   res.status(200).send('B5 Restaurant Backend is running!');
 });
 
+/**
+ * Endpoint สำหรับเพิ่มเมนูอาหารใหม่
+ */
+app.post('/api/menu-items', async (req, res) => {
+    const { 
+        name_th, name_en, desc_th, desc_en, price, 
+        category_th, category_en, image_url 
+    } = req.body;
+
+    if (!name_th || !price || !category_th) {
+        return res.status(400).json({ status: 'error', message: 'Missing required fields: name_th, price, category_th' });
+    }
+
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const newId = `food-${Date.now()}`;
+        const newRow = [
+            newId,
+            name_th,
+            name_en || '',
+            desc_th || '',
+            desc_en || '',
+            price,
+            category_th,
+            category_en || '',
+            '', // options_id
+            'in_stock', // stock_status
+            image_url || ''
+        ];
+
+        await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: 'Food Menu!A:K',
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [newRow] },
+        });
+
+        res.status(201).json({ status: 'success', message: 'Menu item created successfully!', data: { id: newId } });
+
+    } catch (error) {
+        console.error('API /api/menu-items error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to create menu item.' });
+    }
+});
+
+
 app.post('/api/orders', async (req, res) => {
     const { cart, total, tableNumber, specialRequest } = req.body;
     try {
@@ -93,9 +145,6 @@ app.post('/api/orders', async (req, res) => {
     }
 });
 
-/**
- * Endpoint สำหรับให้ KDS ดึงข้อมูลออเดอร์ (แก้ไขแล้ว)
- */
 app.get('/api/get-orders', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
@@ -137,7 +186,7 @@ app.get('/api/get-orders', async (req, res) => {
                 special_request: row[4],
                 status: status,
             };
-        }).filter(order => order !== null); // กรองเอาค่า null ออก
+        }).filter(order => order !== null);
 
         res.json({ status: 'success', data: pendingOrders });
 
@@ -183,7 +232,6 @@ app.post('/api/update-status', async (req, res) => {
     }
 });
 
-// (Endpoints อื่นๆ ให้คงเดิมไว้)
 app.get('/api/menu', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
