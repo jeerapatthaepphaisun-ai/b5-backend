@@ -51,6 +51,9 @@ app.get('/', (req, res) => {
   res.status(200).send('B5 Restaurant Backend is running!');
 });
 
+
+// --- Admin Panel API Endpoints ---
+
 /**
  * Endpoint สำหรับเพิ่มเมนูอาหารใหม่
  */
@@ -74,17 +77,8 @@ app.post('/api/menu-items', async (req, res) => {
 
         const newId = `food-${Date.now()}`;
         const newRow = [
-            newId,
-            name_th,
-            name_en || '',
-            desc_th || '',
-            desc_en || '',
-            price,
-            category_th,
-            category_en || '',
-            '', // options_id
-            'in_stock', // stock_status
-            image_url || ''
+            newId, name_th, name_en || '', desc_th || '', desc_en || '',
+            price, category_th, category_en || '', '', 'in_stock', image_url || ''
         ];
 
         await sheets.spreadsheets.values.append({
@@ -102,6 +96,105 @@ app.post('/api/menu-items', async (req, res) => {
     }
 });
 
+/**
+ * Endpoint สำหรับแก้ไขเมนูอาหาร
+ */
+app.put('/api/menu-items/:id', async (req, res) => {
+    const { id } = req.params;
+    const updatedData = req.body;
+
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const getRows = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Food Menu!A:K',
+        });
+
+        const rows = getRows.data.values;
+        const rowIndex = rows.findIndex(row => row[0] === id);
+
+        if (rowIndex === -1) {
+            return res.status(404).json({ status: 'error', message: 'Menu item not found' });
+        }
+
+        const rowToUpdate = rowIndex + 1;
+        const newRowData = [
+            id,
+            updatedData.name_th || rows[rowIndex][1],
+            updatedData.name_en || rows[rowIndex][2],
+            updatedData.desc_th || rows[rowIndex][3],
+            updatedData.desc_en || rows[rowIndex][4],
+            updatedData.price || rows[rowIndex][5],
+            updatedData.category_th || rows[rowIndex][6],
+            updatedData.category_en || rows[rowIndex][7],
+            updatedData.options_id !== undefined ? updatedData.options_id : rows[rowIndex][8],
+            updatedData.stock_status || rows[rowIndex][9],
+            updatedData.image_url !== undefined ? updatedData.image_url : rows[rowIndex][10],
+        ];
+
+        await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `Food Menu!A${rowToUpdate}:K${rowToUpdate}`,
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [newRowData] },
+        });
+
+        res.status(200).json({ status: 'success', message: 'Menu item updated successfully!' });
+
+    } catch (error) {
+        console.error(`API /api/menu-items/${id} error:`, error);
+        res.status(500).json({ status: 'error', message: 'Failed to update menu item.' });
+    }
+});
+
+/**
+ * Endpoint สำหรับลบเมนูอาหาร (โดยการเคลียร์ข้อมูลในแถว)
+ */
+app.delete('/api/menu-items/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const getRows = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Food Menu!A:K',
+        });
+
+        const rows = getRows.data.values;
+        const rowIndex = rows.findIndex(row => row[0] === id);
+
+        if (rowIndex === -1) {
+            return res.status(404).json({ status: 'error', message: 'Menu item not found' });
+        }
+
+        const rowToClear = rowIndex + 1;
+
+        await sheets.spreadsheets.values.clear({
+            spreadsheetId,
+            range: `Food Menu!A${rowToClear}:K${rowToClear}`,
+        });
+
+        res.status(200).json({ status: 'success', message: 'Menu item deleted successfully!' });
+
+    } catch (error) {
+        console.error(`API DELETE /api/menu-items/${id} error:`, error);
+        res.status(500).json({ status: 'error', message: 'Failed to delete menu item.' });
+    }
+});
+
+
+// --- Customer and KDS API Endpoints ---
 
 app.post('/api/orders', async (req, res) => {
     const { cart, total, tableNumber, specialRequest } = req.body;
@@ -175,7 +268,7 @@ app.get('/api/get-orders', async (req, res) => {
             let itemsArray = [];
             try {
                 itemsArray = JSON.parse(row[2]);
-            } catch (e) { /* ignore if not valid JSON */ }
+            } catch (e) { /* ignore */ }
 
             return {
                 rowNumber: index + 2,
@@ -549,9 +642,7 @@ app.get('/api/order-status', async (req, res) => {
                 let items = [];
                 try {
                     items = JSON.parse(order.itemsJson);
-                } catch(e) {
-                    // Do nothing
-                }
+                } catch(e) { /* Do nothing */ }
                 return {
                     id: order.rowNumber,
                     timestamp: order.timestamp,
