@@ -4,6 +4,7 @@ const { google } = require('googleapis');
 const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
+const jwt = require('jsonwebtoken'); // << ส่วนที่เพิ่มเข้ามา
 
 // 2. ตั้งค่า Express Server
 const app = express();
@@ -17,6 +18,18 @@ app.use(express.json());
 // 4. ตั้งค่าส่วนกลาง (Global Configuration)
 const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw';
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
+
+// << ส่วนที่เพิ่มเข้ามาทั้งหมด >>
+// ---- Authentication Config ----
+// นี่คือ "กุญแจลับ" สำหรับสร้าง Token ควรตั้งให้ซับซ้อนและไม่เปิดเผยให้ใครรู้
+// ในการใช้งานจริง ควรเก็บค่านี้ไว้ใน Environment Variable เหมือนกับ GOOGLE_CREDENTIALS
+const JWT_SECRET = 'B5-is-the-best-restaurant-secret-key-!@#$';
+
+// ตั้งค่า username และ password สำหรับ Admin (เก็บไว้ที่ Backend ปลอดภัยกว่า Frontend)
+const ADMIN_USERNAME = 'admin';
+const ADMIN_PASSWORD = 'b5-very-strong-password'; // << ควรตั้งรหัสผ่านที่ซับซ้อนกว่านี้
+// ---- End Authentication Config ----
+
 
 // ===============================================
 //         WebSocket Server Setup
@@ -49,6 +62,48 @@ wss.on('connection', (ws) => {
 
 app.get('/', (req, res) => {
   res.status(200).send('B5 Restaurant Backend is running!');
+});
+
+
+// << ส่วนที่เพิ่มเข้ามาทั้งหมด >>
+// ===============================================
+//         Authentication API
+// ===============================================
+app.post('/api/login', (req, res) => {
+    try {
+        const { username, password } = req.body;
+
+        // ตรวจสอบ Username และ Password
+        // หมายเหตุ: ในระบบจริง เราควรใช้ bcrypt เพื่อเข้ารหัสรหัสผ่านก่อนเปรียบเทียบ
+        if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+            
+            // ถ้าข้อมูลถูกต้อง ให้สร้าง "บัตรผ่าน" (Token)
+            const payload = { 
+                username: username,
+                role: 'admin' // ระบุสิทธิ์เผื่อไว้ใช้ในอนาคต
+            };
+
+            const token = jwt.sign(
+                payload, 
+                JWT_SECRET, 
+                { expiresIn: '8h' } // Token มีอายุ 8 ชั่วโมง
+            );
+
+            // ส่ง Token กลับไปให้ Frontend
+            res.json({ 
+                status: 'success', 
+                message: 'Login successful!', 
+                token: token 
+            });
+
+        } else {
+            // ถ้าข้อมูลไม่ถูกต้อง
+            res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
+        }
+    } catch (error) {
+        console.error('Login API Error:', error);
+        res.status(500).json({ status: 'error', message: 'เกิดข้อผิดพลาดในระบบ' });
+    }
 });
 
 
@@ -472,6 +527,7 @@ app.get('/api/tables', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch table statuses.' });
     }
 });
+
 app.post('/api/clear-table', async (req, res) => {
     const { tableName } = req.body;
     if (!tableName) {
@@ -530,6 +586,7 @@ app.post('/api/clear-table', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to clear table.' });
     }
 });
+
 app.post('/api/request-bill', async (req, res) => {
     const { tableName } = req.body;
     if (!tableName) {
@@ -588,6 +645,7 @@ app.post('/api/request-bill', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to request bill.' });
     }
 });
+
 app.get('/api/categories', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
@@ -626,6 +684,7 @@ app.get('/api/categories', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
     }
 });
+
 app.get('/api/order-status', async (req, res) => {
     const { table } = req.query;
     if (!table) {
