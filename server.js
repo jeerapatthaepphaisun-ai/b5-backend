@@ -5,7 +5,6 @@ const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt'); // อย่าลืมนำเข้า bcrypt
 
 // 2. ตั้งค่า Express Server
 const app = express();
@@ -18,15 +17,12 @@ app.use(express.json());
 
 // 4. ตั้งค่าส่วนกลาง (Global Configuration)
 const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw';
-// ดึงค่า Credentials จาก Environment Variable ซึ่งปลอดภัยกว่า
-const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}'); 
+const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 
 // ---- Authentication Config ----
-// ดึงค่า JWT Secret จาก Environment Variable เพื่อความปลอดภัยสูงสุด
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = 'B5-is-the-best-restaurant-secret-key-!@#$';
 const ADMIN_USERNAME = 'admin';
-// ใช้รหัสผ่านที่ผ่านการ Hash แล้ว
-const ADMIN_PASSWORD_HASH = '$2b$10$3DvPP6bcxHVjyrUKybPk6.jpEYrChTFIBkIfEy2Hb2zXthgBSRpWW';
+const ADMIN_PASSWORD = 'b5restaurant';
 // ---- End Authentication Config ----
 
 
@@ -65,38 +61,32 @@ app.get('/', (req, res) => {
 
 
 // ===============================================
-//         Authentication API (เวอร์ชันปลอดภัย)
+//         Authentication API
 // ===============================================
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', (req, res) => {
     try {
         const { username, password } = req.body;
 
-        if (username === ADMIN_USERNAME) {
-            // ใช้ bcrypt.compare เพื่อเปรียบเทียบรหัสผ่านที่ผู้ใช้กรอกกับค่า Hash ที่เราเก็บไว้
-            const match = await bcrypt.compare(password, ADMIN_PASSWORD_HASH);
+        if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+            
+            const payload = { 
+                username: username,
+                role: 'admin'
+            };
 
-            if (match) {
-                // ถ้ารหัสผ่านถูกต้อง ให้สร้าง Token
-                const payload = { 
-                    username: username,
-                    role: 'admin'
-                };
-                const token = jwt.sign(
-                    payload, 
-                    JWT_SECRET, 
-                    { expiresIn: '8h' }
-                );
-                res.json({ 
-                    status: 'success', 
-                    message: 'Login successful!', 
-                    token: token 
-                });
-            } else {
-                // ถ้ารหัสผ่านไม่ถูกต้อง
-                res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
-            }
+            const token = jwt.sign(
+                payload, 
+                JWT_SECRET, 
+                { expiresIn: '8h' }
+            );
+            
+            res.json({ 
+                status: 'success', 
+                message: 'Login successful!', 
+                token: token 
+            });
+
         } else {
-            // ถ้า Username ไม่ถูกต้อง
             res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
         }
     } catch (error) {
@@ -104,7 +94,6 @@ app.post('/api/login', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'เกิดข้อผิดพลาดในระบบ' });
     }
 });
-
 
 // ===============================================
 //         Authentication Middleware
@@ -130,6 +119,7 @@ function authenticateToken(req, res, next) {
 
 // --- Admin Panel API Endpoints ---
 
+// << มีการเปลี่ยนแปลงที่นี่ >>
 app.post('/api/menu-items', authenticateToken, async (req, res) => {
     const { 
         name_th, name_en, desc_th, desc_en, price, 
@@ -169,6 +159,7 @@ app.post('/api/menu-items', authenticateToken, async (req, res) => {
     }
 });
 
+// << มีการเปลี่ยนแปลงที่นี่ >>
 app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const updatedData = req.body;
@@ -223,6 +214,7 @@ app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
     }
 });
 
+// << มีการเปลี่ยนแปลงที่นี่ >>
 app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -262,6 +254,7 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
 
 
 // --- Customer, KDS, and POS API Endpoints ---
+// ... (โค้ดส่วนที่เหลือเหมือนเดิมทุกประการ) ...
 
 app.post('/api/orders', async (req, res) => {
     const { cart, total, tableNumber, specialRequest } = req.body;
