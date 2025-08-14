@@ -375,6 +375,38 @@ app.get('/api/menu', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
     }
 });
+
+/**
+ * Endpoint สำหรับดึงรายชื่อโต๊ะทั้งหมด
+ */
+app.get('/api/all-tables', async (req, res) => {
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Tables!A2:A',
+        });
+
+        const rows = response.data.values;
+        if (!rows || rows.length === 0) {
+            return res.json({ status: 'success', data: [] });
+        }
+
+        const tableNames = rows.flat();
+        res.json({ status: 'success', data: tableNames });
+
+    } catch (error) {
+        console.error('API /api/all-tables error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch table list.' });
+    }
+});
+
 app.get('/api/tables', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
@@ -489,12 +521,10 @@ app.post('/api/clear-table', async (req, res) => {
                 }
             });
             
-            // << เพิ่มส่วนนี้
             broadcast({
                 type: 'TABLE_CLEARED',
                 payload: { tableName: tableName }
             });
-            // << จบส่วนที่เพิ่ม
         }
         
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
@@ -549,12 +579,10 @@ app.post('/api/request-bill', async (req, res) => {
                 }
             });
             
-            // << เพิ่มส่วนนี้
             broadcast({
                 type: 'BILL_REQUESTED',
                 payload: { tableName: tableName }
             });
-            // << จบส่วนที่เพิ่ม
         }
         
         res.json({ status: 'success', message: `Table ${tableName} requested for billing.` });
