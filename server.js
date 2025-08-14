@@ -22,7 +22,7 @@ const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 // ---- Authentication Config ----
 const JWT_SECRET = 'B5-is-the-best-restaurant-secret-key-!@#$';
 const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'b5-very-strong-password';
+const ADMIN_PASSWORD = 'b5restaurant';
 // ---- End Authentication Config ----
 
 
