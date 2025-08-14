@@ -376,9 +376,6 @@ app.get('/api/menu', async (req, res) => {
     }
 });
 
-/**
- * Endpoint สำหรับดึงรายชื่อโต๊ะทั้งหมด
- */
 app.get('/api/all-tables', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
