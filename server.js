@@ -22,7 +22,7 @@ const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 // ---- Authentication Config ----
 const JWT_SECRET = 'B5-is-the-best-restaurant-secret-key-!@#$';
 const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'b5restaurant';
+const ADMIN_PASSWORD = '$2b$10$3DvPP6bcxHVjyrUKybPk6.jpEYrChTFIBkIfEy2Hb2zXthgBSRpWW';
 // ---- End Authentication Config ----
 
 
@@ -63,29 +63,32 @@ app.get('/', (req, res) => {
 // ===============================================
 //         Authentication API
 // ===============================================
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => { // 1. เพิ่ม async เข้าไปตรงนี้
     try {
         const { username, password } = req.body;
 
-        if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-            
-            const payload = { 
-                username: username,
-                role: 'admin'
-            };
+        // 2. เปลี่ยนเงื่อนไขการตรวจสอบรหัสผ่าน
+        if (username === ADMIN_USERNAME) {
+            const match = await bcrypt.compare(password, ADMIN_PASSWORD_HASH); // ใช้ bcrypt เปรียบเทียบ
 
-            const token = jwt.sign(
-                payload, 
-                JWT_SECRET, 
-                { expiresIn: '8h' }
-            );
-            
-            res.json({ 
-                status: 'success', 
-                message: 'Login successful!', 
-                token: token 
-            });
-
+            if (match) { // ถ้า match เป็น true แสดงว่ารหัสผ่านถูกต้อง
+                const payload = { 
+                    username: username,
+                    role: 'admin'
+                };
+                const token = jwt.sign(
+                    payload, 
+                    JWT_SECRET, 
+                    { expiresIn: '8h' }
+                );
+                res.json({ 
+                    status: 'success', 
+                    message: 'Login successful!', 
+                    token: token 
+                });
+            } else {
+                res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
+            }
         } else {
             res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
         }
