@@ -4,7 +4,7 @@ const { google } = require('googleapis');
 const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const jwt = require('jsonwebtoken'); // << ส่วนที่เพิ่มเข้ามา
+const jwt = require('jsonwebtoken');
 
 // 2. ตั้งค่า Express Server
 const app = express();
@@ -19,15 +19,10 @@ app.use(express.json());
 const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw';
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 
-// << ส่วนที่เพิ่มเข้ามาทั้งหมด >>
 // ---- Authentication Config ----
-// นี่คือ "กุญแจลับ" สำหรับสร้าง Token ควรตั้งให้ซับซ้อนและไม่เปิดเผยให้ใครรู้
-// ในการใช้งานจริง ควรเก็บค่านี้ไว้ใน Environment Variable เหมือนกับ GOOGLE_CREDENTIALS
 const JWT_SECRET = 'B5-is-the-best-restaurant-secret-key-!@#$';
-
-// ตั้งค่า username และ password สำหรับ Admin (เก็บไว้ที่ Backend ปลอดภัยกว่า Frontend)
 const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'b5-very-strong-password'; // << ควรตั้งรหัสผ่านที่ซับซ้อนกว่านี้
+const ADMIN_PASSWORD = 'b5-very-strong-password';
 // ---- End Authentication Config ----
 
 
@@ -65,7 +60,6 @@ app.get('/', (req, res) => {
 });
 
 
-// << ส่วนที่เพิ่มเข้ามาทั้งหมด >>
 // ===============================================
 //         Authentication API
 // ===============================================
@@ -73,23 +67,19 @@ app.post('/api/login', (req, res) => {
     try {
         const { username, password } = req.body;
 
-        // ตรวจสอบ Username และ Password
-        // หมายเหตุ: ในระบบจริง เราควรใช้ bcrypt เพื่อเข้ารหัสรหัสผ่านก่อนเปรียบเทียบ
         if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
             
-            // ถ้าข้อมูลถูกต้อง ให้สร้าง "บัตรผ่าน" (Token)
             const payload = { 
                 username: username,
-                role: 'admin' // ระบุสิทธิ์เผื่อไว้ใช้ในอนาคต
+                role: 'admin'
             };
 
             const token = jwt.sign(
                 payload, 
                 JWT_SECRET, 
-                { expiresIn: '8h' } // Token มีอายุ 8 ชั่วโมง
+                { expiresIn: '8h' }
             );
-
-            // ส่ง Token กลับไปให้ Frontend
+            
             res.json({ 
                 status: 'success', 
                 message: 'Login successful!', 
@@ -97,7 +87,6 @@ app.post('/api/login', (req, res) => {
             });
 
         } else {
-            // ถ้าข้อมูลไม่ถูกต้อง
             res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
         }
     } catch (error) {
@@ -106,10 +95,32 @@ app.post('/api/login', (req, res) => {
     }
 });
 
+// ===============================================
+//         Authentication Middleware
+// ===============================================
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (token == null) {
+        return res.sendStatus(401); 
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.sendStatus(403);
+        }
+        
+        req.user = user;
+        next(); 
+    });
+}
+
 
 // --- Admin Panel API Endpoints ---
 
-app.post('/api/menu-items', async (req, res) => {
+// << มีการเปลี่ยนแปลงที่นี่ >>
+app.post('/api/menu-items', authenticateToken, async (req, res) => {
     const { 
         name_th, name_en, desc_th, desc_en, price, 
         category_th, category_en, image_url 
@@ -148,7 +159,8 @@ app.post('/api/menu-items', async (req, res) => {
     }
 });
 
-app.put('/api/menu-items/:id', async (req, res) => {
+// << มีการเปลี่ยนแปลงที่นี่ >>
+app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const updatedData = req.body;
 
@@ -202,7 +214,8 @@ app.put('/api/menu-items/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/menu-items/:id', async (req, res) => {
+// << มีการเปลี่ยนแปลงที่นี่ >>
+app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const auth = new google.auth.GoogleAuth({
@@ -241,6 +254,7 @@ app.delete('/api/menu-items/:id', async (req, res) => {
 
 
 // --- Customer, KDS, and POS API Endpoints ---
+// ... (โค้ดส่วนที่เหลือเหมือนเดิมทุกประการ) ...
 
 app.post('/api/orders', async (req, res) => {
     const { cart, total, tableNumber, specialRequest } = req.body;
@@ -527,7 +541,6 @@ app.get('/api/tables', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch table statuses.' });
     }
 });
-
 app.post('/api/clear-table', async (req, res) => {
     const { tableName } = req.body;
     if (!tableName) {
@@ -586,7 +599,6 @@ app.post('/api/clear-table', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to clear table.' });
     }
 });
-
 app.post('/api/request-bill', async (req, res) => {
     const { tableName } = req.body;
     if (!tableName) {
@@ -645,7 +657,6 @@ app.post('/api/request-bill', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to request bill.' });
     }
 });
-
 app.get('/api/categories', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
@@ -684,7 +695,6 @@ app.get('/api/categories', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
     }
 });
-
 app.get('/api/order-status', async (req, res) => {
     const { table } = req.query;
     if (!table) {
