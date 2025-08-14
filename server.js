@@ -34,10 +34,10 @@ function broadcast(data) {
 }
 
 wss.on('connection', (ws) => {
-    console.log('KDS client connected');
+    console.log('A client connected (KDS or POS)');
     clients.add(ws);
     ws.on('close', () => {
-        console.log('KDS client disconnected');
+        console.log('A client disconnected');
         clients.delete(ws);
     });
     ws.on('error', (error) => console.error('WebSocket error:', error));
@@ -54,9 +54,6 @@ app.get('/', (req, res) => {
 
 // --- Admin Panel API Endpoints ---
 
-/**
- * Endpoint สำหรับเพิ่มเมนูอาหารใหม่
- */
 app.post('/api/menu-items', async (req, res) => {
     const { 
         name_th, name_en, desc_th, desc_en, price, 
@@ -96,9 +93,6 @@ app.post('/api/menu-items', async (req, res) => {
     }
 });
 
-/**
- * Endpoint สำหรับแก้ไขเมนูอาหาร
- */
 app.put('/api/menu-items/:id', async (req, res) => {
     const { id } = req.params;
     const updatedData = req.body;
@@ -153,9 +147,6 @@ app.put('/api/menu-items/:id', async (req, res) => {
     }
 });
 
-/**
- * Endpoint สำหรับลบเมนูอาหาร (โดยการเคลียร์ข้อมูลในแถว)
- */
 app.delete('/api/menu-items/:id', async (req, res) => {
     const { id } = req.params;
     try {
@@ -194,7 +185,7 @@ app.delete('/api/menu-items/:id', async (req, res) => {
 });
 
 
-// --- Customer and KDS API Endpoints ---
+// --- Customer, KDS, and POS API Endpoints ---
 
 app.post('/api/orders', async (req, res) => {
     const { cart, total, tableNumber, specialRequest } = req.body;
@@ -497,6 +488,13 @@ app.post('/api/clear-table', async (req, res) => {
                     data: requests
                 }
             });
+            
+            // << เพิ่มส่วนนี้
+            broadcast({
+                type: 'TABLE_CLEARED',
+                payload: { tableName: tableName }
+            });
+            // << จบส่วนที่เพิ่ม
         }
         
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
@@ -550,6 +548,13 @@ app.post('/api/request-bill', async (req, res) => {
                     data: requests
                 }
             });
+            
+            // << เพิ่มส่วนนี้
+            broadcast({
+                type: 'BILL_REQUESTED',
+                payload: { tableName: tableName }
+            });
+            // << จบส่วนที่เพิ่ม
         }
         
         res.json({ status: 'success', message: `Table ${tableName} requested for billing.` });
