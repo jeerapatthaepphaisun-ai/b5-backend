@@ -119,7 +119,6 @@ function authenticateToken(req, res, next) {
 
 // --- Admin Panel API Endpoints ---
 
-// << มีการเปลี่ยนแปลงที่นี่ >>
 app.post('/api/menu-items', authenticateToken, async (req, res) => {
     const { 
         name_th, name_en, desc_th, desc_en, price, 
@@ -159,7 +158,6 @@ app.post('/api/menu-items', authenticateToken, async (req, res) => {
     }
 });
 
-// << มีการเปลี่ยนแปลงที่นี่ >>
 app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const updatedData = req.body;
@@ -214,7 +212,7 @@ app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// << มีการเปลี่ยนแปลงที่นี่ >>
+// << ⭐️⭐️⭐️ โค้ดส่วนนี้คือส่วนที่ถูกแก้ไข ⭐️⭐️⭐️ >>
 app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -225,23 +223,46 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
 
+        // --- ส่วนที่ 1: ค้นหาแถวที่ต้องการลบ ---
         const getRows = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Food Menu!A:K',
+            range: 'Food Menu!A:A', // ดึงแค่คอลัมน์ A มาเช็คก็พอ
         });
 
         const rows = getRows.data.values;
+        if (!rows) {
+             return res.status(404).json({ status: 'error', message: 'Menu sheet is empty or not found' });
+        }
         const rowIndex = rows.findIndex(row => row[0] === id);
 
         if (rowIndex === -1) {
             return res.status(404).json({ status: 'error', message: 'Menu item not found' });
         }
 
-        const rowToClear = rowIndex + 1;
-
-        await sheets.spreadsheets.values.clear({
+        // --- ส่วนที่ 2: ใช้ batchUpdate เพื่อลบทั้งแถว ---
+        // เราต้องหา sheetId ของชีต 'Food Menu' ก่อน
+        const sheetMetadata = await sheets.spreadsheets.get({
             spreadsheetId,
-            range: `Food Menu!A${rowToClear}:K${rowToClear}`,
+        });
+        const sheet = sheetMetadata.data.sheets.find(s => s.properties.title === 'Food Menu');
+        const sheetId = sheet.properties.sheetId;
+
+        await sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            resource: {
+                requests: [
+                    {
+                        deleteDimension: {
+                            range: {
+                                sheetId: sheetId,
+                                dimension: 'ROWS',
+                                startIndex: rowIndex + 1, // +1 เพราะแถว Header คือแถวแรก (index 0)
+                                endIndex: rowIndex + 2
+                            }
+                        }
+                    }
+                ]
+            }
         });
 
         res.status(200).json({ status: 'success', message: 'Menu item deleted successfully!' });
