@@ -212,10 +212,14 @@ app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// << ⭐️⭐️⭐️ โค้ดส่วนนี้คือส่วนที่ถูกแก้ไข ⭐️⭐️⭐️ >>
+// << ⭐️⭐️⭐️ เพิ่ม console.log สำหรับตรวจสอบ ⭐️⭐️⭐️ >>
 app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
+        //  Log สำหรับตรวจสอบการ Deploy ↓↓↓
+        console.log('--- ✅ DEPLOY SUCCESS! Running NEW delete function! ✅ ---'); 
+        //  ↑↑↑ Log สำหรับตรวจสอบการ Deploy
+        
         const auth = new google.auth.GoogleAuth({
             credentials,
             scopes: 'https://www.googleapis.com/auth/spreadsheets',
@@ -223,10 +227,9 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
 
-        // --- ส่วนที่ 1: ค้นหาแถวที่ต้องการลบ ---
         const getRows = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Food Menu!A:A', // ดึงแค่คอลัมน์ A มาเช็คก็พอ
+            range: 'Food Menu!A:A', 
         });
 
         const rows = getRows.data.values;
@@ -239,8 +242,6 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
             return res.status(404).json({ status: 'error', message: 'Menu item not found' });
         }
 
-        // --- ส่วนที่ 2: ใช้ batchUpdate เพื่อลบทั้งแถว ---
-        // เราต้องหา sheetId ของชีต 'Food Menu' ก่อน
         const sheetMetadata = await sheets.spreadsheets.get({
             spreadsheetId,
         });
@@ -256,7 +257,7 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
                             range: {
                                 sheetId: sheetId,
                                 dimension: 'ROWS',
-                                startIndex: rowIndex + 1, // +1 เพราะแถว Header คือแถวแรก (index 0)
+                                startIndex: rowIndex + 1,
                                 endIndex: rowIndex + 2
                             }
                         }
@@ -275,8 +276,6 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
 
 
 // --- Customer, KDS, and POS API Endpoints ---
-// ... (โค้ดส่วนที่เหลือเหมือนเดิมทุกประการ) ...
-
 app.post('/api/orders', async (req, res) => {
     const { cart, total, tableNumber, specialRequest } = req.body;
     try {
