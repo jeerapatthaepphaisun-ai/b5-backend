@@ -20,9 +20,10 @@ const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw';
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 
 // ---- Authentication Config ----
-const JWT_SECRET = 'B5-is-the-best-restaurant-secret-key-!@#$';
-const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'b5restaurant';
+// ดึงค่ามาจาก Environment Variables เพื่อความปลอดภัย
+const JWT_SECRET = process.env.JWT_SECRET;
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 // ---- End Authentication Config ----
 
 
@@ -212,7 +213,6 @@ app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// << ⭐️⭐️⭐️ โค้ดฉบับแก้ไขล่าสุด ⭐️⭐️⭐️ >>
 app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -223,7 +223,6 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
 
-        // ดึงข้อมูลทั้งหมดในชีตมาเพื่อหา rowIndex ที่ถูกต้อง
         const getRows = await sheets.spreadsheets.values.get({
             spreadsheetId,
             range: 'Food Menu!A:A', 
@@ -234,14 +233,12 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
              return res.status(404).json({ status: 'error', message: 'Menu sheet is empty or not found' });
         }
         
-        // rows ที่ได้จาก API จะนับจาก 0 แม้ว่าแถวนั้นจะเป็นแถวที่ 1 ในชีตก็ตาม
         const rowIndex = rows.findIndex(row => row && row[0] === id);
 
         if (rowIndex === -1) {
             return res.status(404).json({ status: 'error', message: 'Menu item not found' });
         }
 
-        // หา sheetId ของ 'Food Menu'
         const sheetMetadata = await sheets.spreadsheets.get({
             spreadsheetId,
         });
@@ -251,13 +248,12 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
         }
         const sheetId = sheet.properties.sheetId;
 
-        // สร้างคำสั่งเพื่อลบแถว
         const request = {
             deleteDimension: {
                 range: {
                     sheetId: sheetId,
                     dimension: 'ROWS',
-                    startIndex: rowIndex, // rowIndex ที่ได้คือ index ที่ถูกต้องสำหรับ API แล้ว
+                    startIndex: rowIndex,
                     endIndex: rowIndex + 1
                 }
             }
