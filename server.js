@@ -20,7 +20,6 @@ const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw';
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 
 // ---- Authentication Config ----
-// ดึงค่ามาจาก Environment Variables เพื่อความปลอดภัย
 const JWT_SECRET = process.env.JWT_SECRET;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -275,6 +274,53 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
 });
 
 
+// ===============================================
+//         Discount API
+// ===============================================
+app.post('/api/apply-discount', async (req, res) => { 
+    const { tableName, discountPercentage } = req.body;
+
+    if (!tableName || discountPercentage === undefined) {
+        return res.status(400).json({ status: 'error', message: 'Missing tableName or discountPercentage' });
+    }
+
+    const percentage = parseFloat(discountPercentage);
+    if (isNaN(percentage) || percentage < 0 || percentage > 100) {
+        return res.status(400).json({ status: 'error', message: 'Invalid percentage value' });
+    }
+
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+        const newRow = [tableName, percentage, timestamp];
+
+        await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: 'Discounts!A:C',
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [newRow] },
+        });
+
+        broadcast({
+            type: 'DISCOUNT_APPLIED',
+            payload: { tableName: tableName }
+        });
+
+        res.json({ status: 'success', message: `Discount of ${percentage}% applied to table ${tableName}` });
+
+    } catch (error) {
+        console.error('API /apply-discount error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to apply discount.' });
+    }
+});
+
+
 // --- Customer, KDS, and POS API Endpoints ---
 app.post('/api/orders', async (req, res) => {
     const { cart, total, tableNumber, specialRequest } = req.body;
@@ -502,56 +548,70 @@ app.get('/api/tables', async (req, res) => {
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
 
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId,
-            range: 'Orders!A:F',
-        });
+        // 1. ดึงข้อมูลจากทั้งสองชีตพร้อมกัน
+        const [ordersResponse, discountsResponse] = await Promise.all([
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:F' }),
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:B' })
+        ]);
 
-        const rows = response.data.values;
-        if (!rows || rows.length <= 1) {
-            return res.json({ status: 'success', data: {} });
+        const orderRows = ordersResponse.data.values || [];
+        const discountRows = discountsResponse.data.values || [];
+
+        // 2. สร้าง Map ของส่วนลดสำหรับแต่ละโต๊ะ (เอาเฉพาะส่วนลดล่าสุด)
+        const discountsMap = {};
+        if (discountRows.length > 1) {
+            discountRows.slice(1).forEach(row => {
+                const tableName = row[0];
+                const percentage = parseFloat(row[1]) || 0;
+                if (tableName) {
+                    discountsMap[tableName] = percentage;
+                }
+            });
         }
 
-        rows.shift();
-        const headers = ['timestamp', 'table', 'items', 'total', 'special_request', 'status'];
-        const orders = rows.map((row, index) => {
-            const order = {};
-            headers.forEach((header, i) => {
-                order[header] = row[i];
-            });
-            try {
-                order.items = JSON.parse(order.items);
-            } catch(e) {
-                order.items = [{ name_th: order.items, name_en: order.items, price: order.total, quantity: 1, selected_options_text_th: '', selected_options_text_en: '' }];
+        // 3. ประมวลผลออเดอร์
+        if (orderRows.length <= 1) {
+            return res.json({ status: 'success', data: {} });
+        }
+        orderRows.shift(); // เอา Header ออก
+        
+        const activeOrders = orderRows.map(row => {
+            let items;
+            try { 
+                items = JSON.parse(row[2]); 
+            } catch (e) { 
+                items = [{ name_th: row[2], price: parseFloat(row[3]) || 0, quantity: 1 }]; 
             }
-            return order;
-        });
-
-        const activeOrders = orders.filter(order => 
-            order.status && order.status.toLowerCase() !== 'paid'
-        );
+            return { 
+                table: row[1], 
+                items: items, 
+                status: row[5] 
+            };
+        }).filter(order => order.status && order.status.toLowerCase() !== 'paid');
 
         const tablesData = {};
         activeOrders.forEach(order => {
-            const tableName = order.table;
-            if (!tablesData[tableName]) {
-                tablesData[tableName] = {
-                    tableName: tableName,
-                    orders: [], total: 0, status: 'occupied'
-                };
+            if (!tablesData[order.table]) {
+                tablesData[order.table] = { tableName: order.table, orders: [], status: 'occupied' };
             }
-            tablesData[tableName].orders.push(...order.items);
-        });
-        
-        activeOrders.forEach(order => {
-            const tableName = order.table;
-            if (tablesData[tableName] && order.status && order.status.toLowerCase() === 'billing') {
-                tablesData[tableName].status = 'billing';
-            }
+            tablesData[order.table].orders.push(...order.items);
         });
 
-        for(const tableName in tablesData) {
-            tablesData[tableName].total = tablesData[tableName].orders.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        // 4. คำนวณยอดรวมและส่วนลด
+        for (const tableName in tablesData) {
+            const subtotal = tablesData[tableName].orders.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const discountPercentage = discountsMap[tableName] || 0;
+            const discountAmount = subtotal * (discountPercentage / 100);
+            const total = subtotal - discountAmount;
+
+            tablesData[tableName].subtotal = subtotal;
+            tablesData[tableName].discountPercentage = discountPercentage;
+            tablesData[tableName].discountAmount = discountAmount;
+            tablesData[tableName].total = total;
+            
+            if (activeOrders.some(o => o.table === tableName && o.status && o.status.toLowerCase() === 'billing')) {
+                 tablesData[tableName].status = 'billing';
+            }
         }
 
         res.json({ status: 'success', data: tablesData });
@@ -561,6 +621,7 @@ app.get('/api/tables', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch table statuses.' });
     }
 });
+
 app.post('/api/clear-table', async (req, res) => {
     const { tableName } = req.body;
     if (!tableName) {
@@ -576,7 +637,7 @@ app.post('/api/clear-table', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:F',
+            range: 'Orders!A:G', // เพิ่ม G เพื่ออ่านวันที่
         });
 
         const rows = response.data.values;
