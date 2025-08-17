@@ -548,7 +548,6 @@ app.get('/api/tables', async (req, res) => {
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
 
-        // 1. ดึงข้อมูลจากทั้งสองชีตพร้อมกัน
         const [ordersResponse, discountsResponse] = await Promise.all([
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:F' }),
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:B' })
@@ -557,49 +556,42 @@ app.get('/api/tables', async (req, res) => {
         const orderRows = ordersResponse.data.values || [];
         const discountRows = discountsResponse.data.values || [];
 
-        // 2. สร้าง Map ของส่วนลดสำหรับแต่ละโต๊ะ (เอาเฉพาะส่วนลดล่าสุด)
         const discountsMap = {};
         if (discountRows.length > 1) {
             discountRows.slice(1).forEach(row => {
-                const tableName = row[0];
-                const percentage = parseFloat(row[1]) || 0;
-                if (tableName) {
-                    discountsMap[tableName] = percentage;
+                if (row && row[0]) {
+                    discountsMap[row[0]] = parseFloat(row[1]) || 0;
                 }
             });
         }
 
-        // 3. ประมวลผลออเดอร์
         if (orderRows.length <= 1) {
             return res.json({ status: 'success', data: {} });
         }
-        orderRows.shift(); // เอา Header ออก
         
-        const activeOrders = orderRows.map(row => {
+        const activeOrders = orderRows.slice(1).filter(row => {
+            return row && row.length >= 6 && row[5] && row[5].toLowerCase() !== 'paid';
+        }).map(row => {
             let items;
             try { 
                 items = JSON.parse(row[2]); 
             } catch (e) { 
-                items = [{ name_th: row[2], price: parseFloat(row[3]) || 0, quantity: 1 }]; 
+                items = [{ name_th: row[2] || 'Unknown Item', price: parseFloat(row[3]) || 0, quantity: 1 }]; 
             }
-            return { 
-                table: row[1], 
-                items: items, 
-                status: row[5] 
-            };
-        }).filter(order => order.status && order.status.toLowerCase() !== 'paid');
+            return { table: row[1], items: items, status: row[5] };
+        });
 
         const tablesData = {};
         activeOrders.forEach(order => {
+            if (!order.table) return;
             if (!tablesData[order.table]) {
                 tablesData[order.table] = { tableName: order.table, orders: [], status: 'occupied' };
             }
             tablesData[order.table].orders.push(...order.items);
         });
 
-        // 4. คำนวณยอดรวมและส่วนลด
         for (const tableName in tablesData) {
-            const subtotal = tablesData[tableName].orders.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const subtotal = tablesData[tableName].orders.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
             const discountPercentage = discountsMap[tableName] || 0;
             const discountAmount = subtotal * (discountPercentage / 100);
             const total = subtotal - discountAmount;
@@ -637,7 +629,7 @@ app.post('/api/clear-table', async (req, res) => {
 
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: 'Orders!A:G', // เพิ่ม G เพื่ออ่านวันที่
+            range: 'Orders!A:G',
         });
 
         const rows = response.data.values;
