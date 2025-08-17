@@ -277,7 +277,7 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
 // ===============================================
 //         Discount API
 // ===============================================
-app.post('/api/apply-discount', async (req, res) => { 
+app.post('/api/apply-discount', authenticateToken, async (req, res) => { 
     const { tableName, discountPercentage } = req.body;
 
     if (!tableName || discountPercentage === undefined) {
