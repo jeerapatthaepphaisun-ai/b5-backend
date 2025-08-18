@@ -666,12 +666,23 @@ app.post('/api/clear-table', async (req, res) => {
             });
         }
         
+        // --- เพิ่มส่วนนี้: รีเซ็ตส่วนลดของโต๊ะให้เป็น 0 ---
+        const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+        await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: 'Discounts!A:C',
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [[tableName, 0, timestamp]] },
+        });
+        // --- จบส่วนที่เพิ่ม ---
+
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
     } catch (error) {
         console.error('API /clear-table error:', error);
         res.status(500).json({ status: 'error', message: 'Failed to clear table.' });
     }
 });
+
 app.post('/api/request-bill', async (req, res) => {
     const { tableName } = req.body;
     if (!tableName) {
@@ -730,6 +741,7 @@ app.post('/api/request-bill', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to request bill.' });
     }
 });
+
 app.get('/api/categories', async (req, res) => {
     try {
         const auth = new google.auth.GoogleAuth({
@@ -768,6 +780,7 @@ app.get('/api/categories', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
     }
 });
+
 app.get('/api/order-status', async (req, res) => {
     const { table } = req.query;
     if (!table) {
