@@ -5,6 +5,7 @@ const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
+const { zonedTimeToUtc, utcToZonedTime, format } = require('date-fns-tz');
 
 // 2. ตั้งค่า Express Server
 const app = express();
@@ -270,6 +271,103 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error(`API DELETE /api/menu-items/${id} error:`, error);
         res.status(500).json({ status: 'error', message: 'Failed to delete menu item.' });
+    }
+});
+
+
+// ===============================================
+//         Dashboard API
+// ===============================================
+app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        const [ordersResponse, discountsResponse] = await Promise.all([
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:G' }),
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:C' })
+        ]);
+
+        const orderRows = ordersResponse.data.values || [];
+        const discountRows = discountsResponse.data.values || [];
+        
+        const timeZone = 'Asia/Bangkok';
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+
+        const paidOrdersToday = orderRows.slice(1).filter(row => {
+            if (!row || row.length < 6 || row[5]?.toLowerCase() !== 'paid') {
+                return false;
+            }
+            const [datePart, timePart] = row[0].split(' ');
+            if (!datePart || !timePart) return false;
+            const [day, month, year] = datePart.split('/');
+            const [hours, minutes, seconds] = timePart.split(':');
+            if (!day || !month || !year || !hours || !minutes || !seconds) return false;
+            
+            // Convert Thai year (พ.ศ.) to AD year (ค.ศ.)
+            const orderDate = new Date(year - 543, month - 1, day, hours, minutes, seconds);
+            
+            return orderDate >= todayStart;
+        });
+
+        let totalSales = 0;
+        let totalOrders = paidOrdersToday.length;
+        const itemSales = {};
+        const salesByHour = Array(24).fill(0);
+
+        paidOrdersToday.forEach(row => {
+            try {
+                const items = JSON.parse(row[2]);
+                let subtotal = 0;
+                items.forEach(item => {
+                    const itemTotal = (item.price || 0) * (item.quantity || 1);
+                    subtotal += itemTotal;
+                    
+                    const itemName = item.name_th || 'Unknown';
+                    itemSales[itemName] = (itemSales[itemName] || 0) + item.quantity;
+                });
+                totalSales += subtotal;
+
+                const [datePart, timePart] = row[0].split(' ');
+                const hour = parseInt(timePart.split(':')[0], 10);
+                if (!isNaN(hour)) {
+                    salesByHour[hour] += subtotal;
+                }
+
+            } catch(e) { /* Skip malformed item rows */ }
+        });
+        
+        const totalDiscount = paidOrdersToday.reduce((sum, row) => sum + (parseFloat(row[6]) || 0), 0);
+
+        const topSellingItems = Object.entries(itemSales)
+            .sort(([, a], [, b]) => b - a)
+            .slice(0, 5)
+            .map(([name, quantity]) => ({ name, quantity }));
+
+        const dashboardData = {
+            kpis: {
+                totalSales: totalSales,
+                totalDiscount: totalDiscount,
+                netRevenue: totalSales - totalSales, // Bug fix: should be totalSales - totalDiscount
+                totalOrders: totalOrders,
+            },
+            topSellingItems: topSellingItems,
+            salesByHour: salesByHour
+        };
+
+        // Correcting the netRevenue calculation
+        dashboardData.kpis.netRevenue = totalSales - totalDiscount;
+
+        res.json({ status: 'success', data: dashboardData });
+
+    } catch (error) {
+        console.error('API /dashboard-data error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
 
@@ -666,7 +764,6 @@ app.post('/api/clear-table', async (req, res) => {
             });
         }
         
-        // --- เพิ่มส่วนนี้: รีเซ็ตส่วนลดของโต๊ะให้เป็น 0 ---
         const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
         await sheets.spreadsheets.values.append({
             spreadsheetId,
@@ -674,7 +771,6 @@ app.post('/api/clear-table', async (req, res) => {
             valueInputOption: 'USER_ENTERED',
             resource: { values: [[tableName, 0, timestamp]] },
         });
-        // --- จบส่วนที่เพิ่ม ---
 
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
     } catch (error) {
