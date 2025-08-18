@@ -276,9 +276,10 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
 
 
 // ===============================================
-//         Dashboard API
+//         Dashboard API (DEBUG VERSION)
 // ===============================================
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+    console.log('--- [1] Dashboard data request received ---');
     try {
         const auth = new google.auth.GoogleAuth({
             credentials,
@@ -287,44 +288,41 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
 
-        // 1. ดึงข้อมูลดิบจากชีต Orders และ Discounts
-        const [ordersResponse, discountsResponse] = await Promise.all([
+        console.log('--- [2] Fetching data from Google Sheets... ---');
+        const [ordersResponse] = await Promise.all([
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:G' }),
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:C' })
         ]);
-
         const orderRows = ordersResponse.data.values || [];
-        
-        // --- ส่วนการประมวลผลข้อมูล ---
+        console.log(`--- [3] Found ${orderRows.length - 1} total order rows. ---`);
 
-        // ตั้งค่า Timezone
         const timeZone = 'Asia/Bangkok';
         const now = new Date();
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
 
-        // 2. กรองเฉพาะออเดอร์ที่จ่ายเงินแล้ว (Paid) และอยู่ในช่วงเวลาของ "วันนี้"
         const paidOrdersToday = orderRows.slice(1).filter(row => {
             if (!row || row.length < 6 || row[5]?.toLowerCase() !== 'paid') {
                 return false;
             }
             try {
-                const [datePart, timePart] = row[0].split(' ');
+                const timestampStr = row[0];
+                const [datePart, timePart] = timestampStr.split(' ');
                 if (!datePart || !timePart) return false;
                 const [day, month, year] = datePart.split('/');
                 const [hours, minutes, seconds] = timePart.split(':');
                 if (!day || !month || !year || !hours || !minutes || !seconds) return false;
                 
-                const orderDate = new Date(year - 543, month - 1, day, hours, minutes, seconds);
+                const orderDate = new Date(parseInt(year) - 543, parseInt(month) - 1, parseInt(day), parseInt(hours), parseInt(minutes), parseInt(seconds));
+                if (isNaN(orderDate.getTime())) return false;
                 
                 return orderDate >= todayStart;
             } catch (e) {
+                console.error(`Error parsing date for row: ${row}`, e);
                 return false;
             }
         });
+        console.log(`--- [4] Found ${paidOrdersToday.length} paid orders for today. ---`);
 
-        // 3. คำนวณ KPI หลัก
         let totalSales = 0;
-        let totalOrders = paidOrdersToday.length;
         const itemSales = {};
         const salesByHour = Array(24).fill(0);
 
@@ -335,45 +333,42 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
                 items.forEach(item => {
                     const itemTotal = (item.price || 0) * (item.quantity || 1);
                     subtotal += itemTotal;
-                    
                     const itemName = item.name_th || 'Unknown';
                     itemSales[itemName] = (itemSales[itemName] || 0) + item.quantity;
                 });
                 totalSales += subtotal;
 
-                const [datePart, timePart] = row[0].split(' ');
+                const timePart = row[0].split(' ')[1];
                 const hour = parseInt(timePart.split(':')[0], 10);
                 if (!isNaN(hour)) {
                     salesByHour[hour] += subtotal;
                 }
-
             } catch(e) { /* ข้ามรายการที่ผิดพลาด */ }
         });
+        console.log('--- [5] KPI calculations complete. ---');
         
         const totalDiscount = paidOrdersToday.reduce((sum, row) => sum + (parseFloat(row[6]) || 0), 0);
 
-        // 4. จัดอันดับเมนูขายดี 5 อันดับแรก
         const topSellingItems = Object.entries(itemSales)
             .sort(([, a], [, b]) => b - a)
             .slice(0, 5)
             .map(([name, quantity]) => ({ name, quantity }));
 
-        // 5. เตรียมข้อมูลส่งกลับ
         const dashboardData = {
             kpis: {
-                totalSales: totalSales,
-                totalDiscount: totalDiscount,
+                totalSales,
+                totalDiscount,
                 netRevenue: totalSales - totalDiscount,
-                totalOrders: totalOrders,
+                totalOrders: paidOrdersToday.length,
             },
-            topSellingItems: topSellingItems,
-            salesByHour: salesByHour
+            topSellingItems,
+            salesByHour
         };
-
+        console.log('--- [6] Successfully prepared dashboard data. Sending response. ---');
         res.json({ status: 'success', data: dashboardData });
 
     } catch (error) {
-        console.error('API /dashboard-data error:', error);
+        console.error('--- [CRITICAL ERROR] in dashboard API: ---', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
