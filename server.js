@@ -287,34 +287,42 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
 
+        // 1. ดึงข้อมูลดิบจากชีต Orders และ Discounts
         const [ordersResponse, discountsResponse] = await Promise.all([
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:G' }),
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:C' })
         ]);
 
         const orderRows = ordersResponse.data.values || [];
-        const discountRows = discountsResponse.data.values || [];
         
+        // --- ส่วนการประมวลผลข้อมูล ---
+
+        // ตั้งค่า Timezone
         const timeZone = 'Asia/Bangkok';
         const now = new Date();
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
 
+        // 2. กรองเฉพาะออเดอร์ที่จ่ายเงินแล้ว (Paid) และอยู่ในช่วงเวลาของ "วันนี้"
         const paidOrdersToday = orderRows.slice(1).filter(row => {
             if (!row || row.length < 6 || row[5]?.toLowerCase() !== 'paid') {
                 return false;
             }
-            const [datePart, timePart] = row[0].split(' ');
-            if (!datePart || !timePart) return false;
-            const [day, month, year] = datePart.split('/');
-            const [hours, minutes, seconds] = timePart.split(':');
-            if (!day || !month || !year || !hours || !minutes || !seconds) return false;
-            
-            // Convert Thai year (พ.ศ.) to AD year (ค.ศ.)
-            const orderDate = new Date(year - 543, month - 1, day, hours, minutes, seconds);
-            
-            return orderDate >= todayStart;
+            try {
+                const [datePart, timePart] = row[0].split(' ');
+                if (!datePart || !timePart) return false;
+                const [day, month, year] = datePart.split('/');
+                const [hours, minutes, seconds] = timePart.split(':');
+                if (!day || !month || !year || !hours || !minutes || !seconds) return false;
+                
+                const orderDate = new Date(year - 543, month - 1, day, hours, minutes, seconds);
+                
+                return orderDate >= todayStart;
+            } catch (e) {
+                return false;
+            }
         });
 
+        // 3. คำนวณ KPI หลัก
         let totalSales = 0;
         let totalOrders = paidOrdersToday.length;
         const itemSales = {};
@@ -339,29 +347,28 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
                     salesByHour[hour] += subtotal;
                 }
 
-            } catch(e) { /* Skip malformed item rows */ }
+            } catch(e) { /* ข้ามรายการที่ผิดพลาด */ }
         });
         
         const totalDiscount = paidOrdersToday.reduce((sum, row) => sum + (parseFloat(row[6]) || 0), 0);
 
+        // 4. จัดอันดับเมนูขายดี 5 อันดับแรก
         const topSellingItems = Object.entries(itemSales)
             .sort(([, a], [, b]) => b - a)
             .slice(0, 5)
             .map(([name, quantity]) => ({ name, quantity }));
 
+        // 5. เตรียมข้อมูลส่งกลับ
         const dashboardData = {
             kpis: {
                 totalSales: totalSales,
                 totalDiscount: totalDiscount,
-                netRevenue: totalSales - totalSales, // Bug fix: should be totalSales - totalDiscount
+                netRevenue: totalSales - totalDiscount,
                 totalOrders: totalOrders,
             },
             topSellingItems: topSellingItems,
             salesByHour: salesByHour
         };
-
-        // Correcting the netRevenue calculation
-        dashboardData.kpis.netRevenue = totalSales - totalDiscount;
 
         res.json({ status: 'success', data: dashboardData });
 
