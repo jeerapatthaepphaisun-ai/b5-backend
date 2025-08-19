@@ -1,6 +1,6 @@
 /**
  * B5 Restaurant Backend Server (Final Version)
- * รวมทุกฟังก์ชันและการปรับปรุงความปลอดภัยทั้งหมด
+ * Includes all features, security updates, and bug fixes.
  */
 
 const express = require('express');
@@ -448,13 +448,22 @@ app.post('/api/request-bill', async (req, res) => {
 app.get('/api/categories', async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!G2:G' });
+        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!G2:H' });
         const rows = response.data.values || [];
         if (rows.length === 0) return res.json({ status: 'success', data: [] });
         
-        const uniqueCategories = [...new Set(rows.flat())];
-        res.json({ status: 'success', data: uniqueCategories.map(cat => ({ category_th: cat })) });
+        const uniqueCategories = [];
+        const seenCategories = new Set();
+        rows.forEach(row => {
+            const [category_th, category_en] = row;
+            if (category_th && !seenCategories.has(category_th)) {
+                seenCategories.add(category_th);
+                uniqueCategories.push({ category_th, category_en: category_en || category_th });
+            }
+        });
+        res.json({ status: 'success', data: uniqueCategories });
     } catch (error) {
+        console.error('API /categories error:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
     }
 });
