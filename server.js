@@ -1,21 +1,16 @@
 /**
- * B5 Restaurant Backend Server (v4 - Final & Secure)
- * เซิร์ฟเวอร์สำหรับจัดการระบบร้านอาหาร B5
- * รวมทุกฟังก์ชันและระบบความปลอดภัยในการเข้ารหัสรหัสผ่าน
+ * B5 Restaurant Backend Server (Final Version)
+ * รองรับโครงสร้าง Google Sheet แบบมาตรฐาน (Single Header Row)
+ * รวมทุกฟังก์ชันและการปรับปรุงความปลอดภัยทั้งหมด
  */
 
-// 1. นำเข้า Library ที่จำเป็น
 const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt'); // 👈 เพิ่มเข้ามาสำหรับเข้ารหัส
-
-// ===============================================
-//           การตั้งค่า (Configuration)
-// ===============================================
+const bcrypt = require('bcrypt');
 
 const app = express();
 const server = http.createServer(app);
@@ -27,14 +22,19 @@ app.use(express.json());
 const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw';
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 
-// --- Authentication & Security Configuration ---
 const JWT_SECRET = process.env.JWT_SECRET;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; // 👈 ตอนนี้ควรเป็น Hashed Password
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
-// ===============================================
-//            WebSocket Server Setup
-// ===============================================
+async function getGoogleSheetsClient() {
+    const auth = new google.auth.GoogleAuth({
+        credentials,
+        scopes: 'https://www.googleapis.com/auth/spreadsheets',
+    });
+    const client = await auth.getClient();
+    return google.sheets({ version: 'v4', auth: client });
+}
+
 const wss = new WebSocketServer({ server });
 const clients = new Set();
 
@@ -57,16 +57,10 @@ wss.on('connection', (ws) => {
     ws.on('error', (error) => console.error('WebSocket Error:', error));
 });
 
-
-// ===============================================
-//        Middleware สำหรับยืนยันตัวตน (JWT)
-// ===============================================
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
-
     if (token == null) return res.sendStatus(401);
-
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) return res.sendStatus(403);
         req.user = user;
@@ -74,33 +68,21 @@ function authenticateToken(req, res, next) {
     });
 }
 
-// ===============================================
-//               API Endpoints
-// ===============================================
-
 app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running!'));
 
-// --- Authentication API (อัปเดตให้ใช้ bcrypt) ---
-app.post('/api/login', async (req, res) => { // 👈 เพิ่ม async
+app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
-
-        // ตรวจสอบ Username ก่อน
         if (username === ADMIN_USERNAME) {
-            // ใช้ bcrypt.compare เพื่อเปรียบเทียบรหัสผ่าน
             const match = await bcrypt.compare(password, ADMIN_PASSWORD);
-
             if (match) {
-                // ถ้ารหัสผ่านตรงกัน ให้สร้าง Token
                 const payload = { username, role: 'admin' };
                 const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
                 res.json({ status: 'success', message: 'Login successful!', token });
             } else {
-                // ถ้ารหัสผ่านไม่ตรง
                 res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
             }
         } else {
-            // ถ้า Username ไม่ตรง
             res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
         }
     } catch (error) {
@@ -109,19 +91,43 @@ app.post('/api/login', async (req, res) => { // 👈 เพิ่ม async
     }
 });
 
+app.get('/api/menu', async (req, res) => {
+    try {
+        const sheets = await getGoogleSheetsClient();
+        const [menuResponse, optionsResponse] = await Promise.all([
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' }),
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Options!A:D' })
+        ]);
+        const menuRows = menuResponse.data.values || [];
+        const optionRows = optionsResponse.data.values || [];
+        if (menuRows.length <= 1) return res.json({ status: 'success', data: [] });
 
-// --- Helper Function สำหรับ Google Sheets ---
-async function getGoogleSheetsClient() {
-    const auth = new google.auth.GoogleAuth({
-        credentials,
-        scopes: 'https://www.googleapis.com/auth/spreadsheets',
-    });
-    const client = await auth.getClient();
-    return google.sheets({ version: 'v4', auth: client });
-}
+        const menuHeaders = menuRows.shift(); // Get headers from Row 1
+        if(optionRows.length > 0) optionRows.shift();
+        
+        const optionsMap = optionRows.reduce((map, row) => {
+            const [optionSetId, label_th, label_en, price_add] = row;
+            if (!map[optionSetId]) map[optionSetId] = [];
+            map[optionSetId].push({ label_th, label_en, price_add: parseFloat(price_add) || 0 });
+            return map;
+        }, {});
 
+        const menuData = menuRows.map(row => { // Map data starting from what was Row 2
+            const item = {};
+            menuHeaders.forEach((header, index) => item[header] = row[index]);
+            const optionIds = item.options_id ? item.options_id.split(',') : [];
+            item.option_groups = optionIds.reduce((groups, id) => {
+                if (optionsMap[id]) groups[id] = optionsMap[id];
+                return groups;
+            }, {});
+            return item;
+        });
+        res.json({ status: 'success', data: menuData });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
+    }
+});
 
-// --- Admin Panel API Endpoints ---
 app.post('/api/menu-items', authenticateToken, async (req, res) => {
     try {
         const { name_th, price, category_th, name_en, desc_th, desc_en, image_url } = req.body;
@@ -178,8 +184,6 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
     }
 });
 
-
-// --- Dashboard API ---
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
@@ -246,45 +250,6 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
         res.json({ status: 'success', data: { kpis: { totalSales, totalDiscount, netRevenue, totalOrders, averageOrderValue }, topSellingItems, salesByCategory, salesByDay: sortedSalesByDay, salesByHour } });
     } catch (error) {
         res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
-    }
-});
-
-
-// --- Customer, KDS, and POS APIs (Refactored to use Helper) ---
-app.get('/api/menu', async (req, res) => {
-    try {
-        const sheets = await getGoogleSheetsClient();
-        const [menuResponse, optionsResponse] = await Promise.all([
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' }),
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Options!A:D' })
-        ]);
-        const menuRows = menuResponse.data.values || [];
-        const optionRows = optionsResponse.data.values || [];
-        if (menuRows.length <= 1) return res.json({ status: 'success', data: [] });
-
-        const menuHeaders = menuRows.shift();
-        if(optionRows.length > 0) optionRows.shift();
-        
-        const optionsMap = optionRows.reduce((map, row) => {
-            const [optionSetId, label_th, label_en, price_add] = row;
-            if (!map[optionSetId]) map[optionSetId] = [];
-            map[optionSetId].push({ label_th, label_en, price_add: parseFloat(price_add) || 0 });
-            return map;
-        }, {});
-
-        const menuData = menuRows.map(row => {
-            const item = {};
-            menuHeaders.forEach((header, index) => item[header] = row[index]);
-            const optionIds = item.options_id ? item.options_id.split(',') : [];
-            item.option_groups = optionIds.reduce((groups, id) => {
-                if (optionsMap[id]) groups[id] = optionsMap[id];
-                return groups;
-            }, {});
-            return item;
-        });
-        res.json({ status: 'success', data: menuData });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
     }
 });
 
@@ -511,9 +476,6 @@ app.post('/api/apply-discount', authenticateToken, async (req, res) => {
     }
 });
 
-// ===============================================
-//                Server Start
-// ===============================================
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
