@@ -5,6 +5,18 @@ const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt'); // 👈 เพิ่มบรรทัดนี้
+
+// ---- โค้ดสำหรับสร้าง HASH ชั่วคราว ----
+const saltRounds = 10;
+const myPlaintextPassword = 'b5restaurant'; // 👈 แก้ไขตรงนี้
+bcrypt.hash(myPlaintextPassword, saltRounds, (err, hash) => {
+    if (err) {
+        console.error('Error hashing password:', err);
+    } else {
+        console.log('Hashed Password:', hash);
+    }
+});
 const { zonedTimeToUtc, utcToZonedTime, format } = require('date-fns-tz');
 
 // 2. ตั้งค่า Express Server
@@ -64,30 +76,28 @@ app.get('/', (req, res) => {
 // ===============================================
 //         Authentication API
 // ===============================================
-app.post('/api/login', (req, res) => {
+// อย่าลืม const bcrypt = require('bcrypt'); ไว้บนสุดของไฟล์
+
+app.post('/api/login', async (req, res) => { // 👈 เพิ่ม async
     try {
         const { username, password } = req.body;
 
-        if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-            
-            const payload = { 
-                username: username,
-                role: 'admin'
-            };
+        // ตรวจสอบ Username ก่อน
+        if (username === ADMIN_USERNAME) {
+            // ใช้ bcrypt.compare เพื่อเปรียบเทียบรหัสผ่าน
+            const match = await bcrypt.compare(password, ADMIN_PASSWORD);
 
-            const token = jwt.sign(
-                payload, 
-                JWT_SECRET, 
-                { expiresIn: '8h' }
-            );
-            
-            res.json({ 
-                status: 'success', 
-                message: 'Login successful!', 
-                token: token 
-            });
-
+            if (match) {
+                // ถ้ารหัสผ่านตรงกัน ให้สร้าง Token
+                const payload = { username, role: 'admin' };
+                const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
+                res.json({ status: 'success', message: 'Login successful!', token });
+            } else {
+                // ถ้ารหัสผ่านไม่ตรง
+                res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
+            }
         } else {
+            // ถ้า Username ไม่ตรง
             res.status(401).json({ status: 'error', message: 'Username หรือ Password ไม่ถูกต้อง' });
         }
     } catch (error) {
