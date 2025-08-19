@@ -1,6 +1,5 @@
 /**
  * B5 Restaurant Backend Server (Final Version)
- * รองรับโครงสร้าง Google Sheet แบบมาตรฐาน (Single Header Row)
  * รวมทุกฟังก์ชันและการปรับปรุงความปลอดภัยทั้งหมด
  */
 
@@ -24,7 +23,7 @@ const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; // Hashed Password
 
 async function getGoogleSheetsClient() {
     const auth = new google.auth.GoogleAuth({
@@ -94,32 +93,14 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/menu', async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
-        const [menuResponse, optionsResponse] = await Promise.all([
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' }),
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Options!A:D' })
-        ]);
-        const menuRows = menuResponse.data.values || [];
-        const optionRows = optionsResponse.data.values || [];
+        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' });
+        const menuRows = response.data.values || [];
         if (menuRows.length <= 1) return res.json({ status: 'success', data: [] });
 
-        const menuHeaders = menuRows.shift(); // Get headers from Row 1
-        if(optionRows.length > 0) optionRows.shift();
-        
-        const optionsMap = optionRows.reduce((map, row) => {
-            const [optionSetId, label_th, label_en, price_add] = row;
-            if (!map[optionSetId]) map[optionSetId] = [];
-            map[optionSetId].push({ label_th, label_en, price_add: parseFloat(price_add) || 0 });
-            return map;
-        }, {});
-
-        const menuData = menuRows.map(row => { // Map data starting from what was Row 2
+        const menuHeaders = menuRows.shift();
+        const menuData = menuRows.map(row => {
             const item = {};
             menuHeaders.forEach((header, index) => item[header] = row[index]);
-            const optionIds = item.options_id ? item.options_id.split(',') : [];
-            item.option_groups = optionIds.reduce((groups, id) => {
-                if (optionsMap[id]) groups[id] = optionsMap[id];
-                return groups;
-            }, {});
             return item;
         });
         res.json({ status: 'success', data: menuData });
@@ -136,9 +117,12 @@ app.post('/api/menu-items', authenticateToken, async (req, res) => {
         }
         const sheets = await getGoogleSheetsClient();
         const newId = `food-${Date.now()}`;
-        const newRow = [newId, name_th, name_en || '', desc_th || '', desc_en || '', price, category_th, '', '', 'in_stock', image_url || ''];
+        const newRow = [
+            newId, name_th, name_en || '', desc_th || '', desc_en || '', 
+            price, category_th, req.body.category_en || '', '', 'in_stock', image_url || ''
+        ];
         await sheets.spreadsheets.values.append({ spreadsheetId, range: 'Food Menu!A:K', valueInputOption: 'USER_ENTERED', resource: { values: [newRow] } });
-        res.status(201).json({ status: 'success', message: 'Menu item created successfully!', data: { id: newId } });
+        res.status(201).json({ status: 'success', message: 'เพิ่มเมนูสำเร็จ!', data: { id: newId } });
     } catch (error) {
         res.status(500).json({ status: 'error', message: 'Failed to create menu item.' });
     }
@@ -156,9 +140,15 @@ app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
         if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Menu item not found' });
         const rowToUpdate = rowIndex + 1;
         const existingRow = rows[rowIndex];
-        const newRowData = [id, updatedData.name_th || existingRow[1], updatedData.name_en || existingRow[2], updatedData.desc_th || existingRow[3], updatedData.desc_en || existingRow[4], updatedData.price || existingRow[5], updatedData.category_th || existingRow[6], updatedData.category_en || existingRow[7], updatedData.options_id !== undefined ? updatedData.options_id : existingRow[8], updatedData.stock_status || existingRow[9], updatedData.image_url !== undefined ? updatedData.image_url : existingRow[10]];
+        const newRowData = [
+            id, updatedData.name_th || existingRow[1], updatedData.name_en || existingRow[2],
+            updatedData.desc_th || existingRow[3], updatedData.desc_en || existingRow[4],
+            updatedData.price || existingRow[5], updatedData.category_th || existingRow[6],
+            updatedData.category_en || existingRow[7], existingRow[8], 
+            existingRow[9], updatedData.image_url || existingRow[10]
+        ];
         await sheets.spreadsheets.values.update({ spreadsheetId, range: `Food Menu!A${rowToUpdate}:K${rowToUpdate}`, valueInputOption: 'USER_ENTERED', resource: { values: [newRowData] } });
-        res.status(200).json({ status: 'success', message: 'Menu item updated successfully!' });
+        res.status(200).json({ status: 'success', message: 'อัปเดตเมนูสำเร็จ!' });
     } catch (error) {
         res.status(500).json({ status: 'error', message: 'Failed to update menu item.' });
     }
@@ -178,9 +168,36 @@ app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
         if (!sheet) return res.status(404).json({ status: 'error', message: 'Sheet "Food Menu" not found' });
         const request = { deleteDimension: { range: { sheetId: sheet.properties.sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } };
         await sheets.spreadsheets.batchUpdate({ spreadsheetId, resource: { requests: [request] } });
-        res.status(200).json({ status: 'success', message: 'Menu item deleted successfully!' });
+        res.status(200).json({ status: 'success', message: 'ลบเมนูสำเร็จ!' });
     } catch (error) {
         res.status(500).json({ status: 'error', message: 'Failed to delete menu item.' });
+    }
+});
+
+app.post('/api/menu-items/:id/stock', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { stock_status } = req.body;
+        if (!stock_status || (stock_status !== 'in_stock' && stock_status !== 'out_of_stock')) {
+            return res.status(400).json({ status: 'error', message: 'Invalid stock status.' });
+        }
+        const sheets = await getGoogleSheetsClient();
+        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:A' });
+        const rows = getRows.data.values || [];
+        const rowIndex = rows.findIndex(row => row && row[0] === id);
+        if (rowIndex === -1) {
+            return res.status(404).json({ status: 'error', message: 'Menu item not found' });
+        }
+        const rowToUpdate = rowIndex + 1;
+        await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `Food Menu!J${rowToUpdate}`,
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [[stock_status]] },
+        });
+        res.json({ status: 'success', message: 'Stock status updated.' });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: 'Failed to update stock status.' });
     }
 });
 
