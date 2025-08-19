@@ -93,25 +93,47 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/menu', async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' });
-        const menuRows = response.data.values || [];
+        const [menuResponse, optionsResponse] = await Promise.all([
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' }),
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Options!A:D' })
+        ]);
+        const menuRows = menuResponse.data.values || [];
+        const optionRows = optionsResponse.data.values || [];
         if (menuRows.length <= 1) return res.json({ status: 'success', data: [] });
 
         const menuHeaders = menuRows.shift();
+        if (optionRows.length > 0) optionRows.shift();
+        
+        const optionsMap = optionRows.reduce((map, row) => {
+            const [optionSetId, label_th, label_en, price_add] = row;
+            if (optionSetId && !map[optionSetId]) map[optionSetId] = [];
+            if(optionSetId) map[optionSetId].push({ label_th, label_en, price_add: parseFloat(price_add) || 0 });
+            return map;
+        }, {});
+
         const menuData = menuRows.map(row => {
             const item = {};
             menuHeaders.forEach((header, index) => item[header] = row[index]);
+            const optionIds = item.options_id ? item.options_id.split(',') : [];
+            item.option_groups = optionIds.reduce((groups, id) => {
+                const trimmedId = id.trim();
+                if (optionsMap[trimmedId]) {
+                    groups[trimmedId] = optionsMap[trimmedId];
+                }
+                return groups;
+            }, {});
             return item;
         });
         res.json({ status: 'success', data: menuData });
     } catch (error) {
+        console.error('Error fetching menu with options:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
     }
 });
 
 app.post('/api/menu-items', authenticateToken, async (req, res) => {
     try {
-        const { name_th, price, category_th, name_en, desc_th, desc_en, image_url } = req.body;
+        const { name_th, price, category_th, name_en, desc_th, desc_en, image_url, options_id } = req.body;
         if (!name_th || !price || !category_th) {
             return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         }
@@ -119,7 +141,7 @@ app.post('/api/menu-items', authenticateToken, async (req, res) => {
         const newId = `food-${Date.now()}`;
         const newRow = [
             newId, name_th, name_en || '', desc_th || '', desc_en || '', 
-            price, category_th, req.body.category_en || '', '', 'in_stock', image_url || ''
+            price, category_th, req.body.category_en || '', options_id || '', 'in_stock', image_url || ''
         ];
         await sheets.spreadsheets.values.append({ spreadsheetId, range: 'Food Menu!A:K', valueInputOption: 'USER_ENTERED', resource: { values: [newRow] } });
         res.status(201).json({ status: 'success', message: 'เพิ่มเมนูสำเร็จ!', data: { id: newId } });
@@ -144,7 +166,7 @@ app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
             id, updatedData.name_th || existingRow[1], updatedData.name_en || existingRow[2],
             updatedData.desc_th || existingRow[3], updatedData.desc_en || existingRow[4],
             updatedData.price || existingRow[5], updatedData.category_th || existingRow[6],
-            updatedData.category_en || existingRow[7], existingRow[8], 
+            updatedData.category_en || existingRow[7], updatedData.options_id || existingRow[8], 
             existingRow[9], updatedData.image_url || existingRow[10]
         ];
         await sheets.spreadsheets.values.update({ spreadsheetId, range: `Food Menu!A${rowToUpdate}:K${rowToUpdate}`, valueInputOption: 'USER_ENTERED', resource: { values: [newRowData] } });
@@ -291,7 +313,7 @@ app.get('/api/get-orders', async (req, res) => {
         const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:F' });
         const rows = response.data.values || [];
         if (rows.length <= 1) return res.json({ status: 'success', data: [] });
-        const activeStatuses = new Set(['pending', 'cooking', 'serving']);
+        const activeStatuses = new Set(['pending', 'cooking', 'serving', 'preparing']);
         const pendingOrders = rows.slice(1).map((row, index) => {
             const status = (row[5] || 'Pending').toLowerCase();
             if (!activeStatuses.has(status)) return null;
@@ -426,20 +448,12 @@ app.post('/api/request-bill', async (req, res) => {
 app.get('/api/categories', async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!G2:H' });
+        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!G2:G' });
         const rows = response.data.values || [];
         if (rows.length === 0) return res.json({ status: 'success', data: [] });
         
-        const uniqueCategories = [];
-        const seenCategories = new Set();
-        rows.forEach(row => {
-            const [category_th, category_en] = row;
-            if (category_th && !seenCategories.has(category_th)) {
-                seenCategories.add(category_th);
-                uniqueCategories.push({ category_th, category_en });
-            }
-        });
-        res.json({ status: 'success', data: uniqueCategories });
+        const uniqueCategories = [...new Set(rows.flat())];
+        res.json({ status: 'success', data: uniqueCategories.map(cat => ({ category_th: cat })) });
     } catch (error) {
         res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
     }
