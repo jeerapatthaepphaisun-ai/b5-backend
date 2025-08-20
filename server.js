@@ -167,7 +167,7 @@ app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
             id, updatedData.name_th || existingRow[1], updatedData.name_en || existingRow[2],
             updatedData.desc_th || existingRow[3], updatedData.desc_en || existingRow[4],
             updatedData.price || existingRow[5], updatedData.category_th || existingRow[6],
-            updatedData.category_en || existingRow[7], updatedData.options_id || existingRow[8], 
+            updatedData.category_en || existingRow[7], updatedData.options_id !== undefined ? updatedData.options_id : existingRow[8], 
             existingRow[9], updatedData.image_url !== undefined ? updatedData.image_url : existingRow[10]
         ];
         await sheets.spreadsheets.values.update({ spreadsheetId, range: `Food Menu!A${rowToUpdate}:K${rowToUpdate}`, valueInputOption: 'USER_ENTERED', resource: { values: [newRowData] } });
@@ -372,6 +372,7 @@ app.delete('/api/options/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to delete option.' });
     }
 });
+
 
 // --- Dashboard API ---
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
