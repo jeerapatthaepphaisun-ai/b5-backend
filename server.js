@@ -1,6 +1,6 @@
 /**
- * B5 Restaurant Backend Server (Final Version)
- * Includes all features, security updates, and bug fixes.
+ * B5 Restaurant Backend Server (v6 - Category Management)
+ * Includes all features, security, and full CRUD APIs for Categories.
  */
 
 const express = require('express');
@@ -223,6 +223,107 @@ app.post('/api/menu-items/:id/stock', authenticateToken, async (req, res) => {
     }
 });
 
+// --- API สำหรับจัดการหมวดหมู่ (Categories CRUD) ---
+app.get('/api/categories', async (req, res) => {
+    try {
+        const sheets = await getGoogleSheetsClient();
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Categories!A:C',
+        });
+        const rows = response.data.values || [];
+        if (rows.length <= 1) return res.json({ status: 'success', data: [] });
+        
+        const headers = rows.shift();
+        const categories = rows.map(row => {
+            const category = {};
+            headers.forEach((header, index) => {
+                category[header] = row[index];
+            });
+            return category;
+        });
+        res.json({ status: 'success', data: categories });
+    } catch (error) {
+        console.error('API /categories error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
+    }
+});
+
+app.post('/api/categories', authenticateToken, async (req, res) => {
+    try {
+        const { name_th, name_en } = req.body;
+        if (!name_th) {
+            return res.status(400).json({ status: 'error', message: 'Category name (TH) is required.' });
+        }
+        const sheets = await getGoogleSheetsClient();
+        const newId = `cat-${Date.now()}`;
+        const newRow = [newId, name_th, name_en || ''];
+
+        await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: 'Categories!A:C',
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [newRow] },
+        });
+        res.status(201).json({ status: 'success', message: 'เพิ่มหมวดหมู่สำเร็จ!' });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: 'Failed to create category.' });
+    }
+});
+
+app.put('/api/categories/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name_th, name_en } = req.body;
+        if (!name_th) {
+            return res.status(400).json({ status: 'error', message: 'Category name (TH) is required.' });
+        }
+        const sheets = await getGoogleSheetsClient();
+        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Categories!A:C' });
+        const rows = getRows.data.values;
+        if (!rows) return res.status(404).json({ status: 'error', message: 'Categories sheet not found.' });
+
+        const rowIndex = rows.findIndex(row => row && row[0] === id);
+        if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Category not found' });
+        
+        const rowToUpdate = rowIndex + 1;
+        await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `Categories!B${rowToUpdate}:C${rowToUpdate}`,
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [[name_th, name_en || '']] },
+        });
+        res.json({ status: 'success', message: 'อัปเดตหมวดหมู่สำเร็จ!' });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: 'Failed to update category.' });
+    }
+});
+
+app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const sheets = await getGoogleSheetsClient();
+        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Categories!A:A' });
+        const rows = getRows.data.values;
+        if (!rows) return res.status(404).json({ status: 'error', message: 'Categories sheet not found.' });
+        
+        const rowIndex = rows.findIndex(row => row && row[0] === id);
+        if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Category not found' });
+        
+        const sheetMetadata = await sheets.spreadsheets.get({ spreadsheetId });
+        const sheet = sheetMetadata.data.sheets.find(s => s.properties.title === 'Categories');
+        if (!sheet) return res.status(404).json({ status: 'error', message: 'Sheet "Categories" not found' });
+        
+        const request = { deleteDimension: { range: { sheetId: sheet.properties.sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } };
+        await sheets.spreadsheets.batchUpdate({ spreadsheetId, resource: { requests: [request] } });
+        res.json({ status: 'success', message: 'ลบหมวดหมู่สำเร็จ!' });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: 'Failed to delete category.' });
+    }
+});
+
+
+// --- Dashboard API ---
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
@@ -291,6 +392,9 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
+
+// ... (The rest of the original APIs: orders, kds, pos, etc.)
+// ... (I'm adding them back for true completeness)
 
 app.post('/api/orders', async (req, res) => {
     try {
@@ -445,29 +549,6 @@ app.post('/api/request-bill', async (req, res) => {
     }
 });
 
-app.get('/api/categories', async (req, res) => {
-    try {
-        const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!G2:H' });
-        const rows = response.data.values || [];
-        if (rows.length === 0) return res.json({ status: 'success', data: [] });
-        
-        const uniqueCategories = [];
-        const seenCategories = new Set();
-        rows.forEach(row => {
-            const [category_th, category_en] = row;
-            if (category_th && !seenCategories.has(category_th)) {
-                seenCategories.add(category_th);
-                uniqueCategories.push({ category_th, category_en: category_en || category_th });
-            }
-        });
-        res.json({ status: 'success', data: uniqueCategories });
-    } catch (error) {
-        console.error('API /categories error:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
-    }
-});
-
 app.get('/api/order-status', async (req, res) => {
     try {
         const { table } = req.query;
@@ -515,6 +596,7 @@ app.post('/api/apply-discount', authenticateToken, async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to apply discount.' });
     }
 });
+
 
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
