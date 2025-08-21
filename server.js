@@ -639,7 +639,7 @@ app.get('/api/order-status', async (req, res) => {
         const rows = response.data.values || [];
         if (rows.length <= 1) return res.json({ status: 'success', data: [] });
 
-        const activeStatuses = new Set(['paid', 'completed']);
+        const activeStatuses = new Set(['paid']); // <<<< ****** THIS IS THE CHANGE ******
         const activeOrders = rows.slice(1).map((row, index) => {
             if (row[1] !== table || activeStatuses.has(row[5]?.toLowerCase())) return null;
             let items = [];
