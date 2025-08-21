@@ -1,7 +1,7 @@
 /**
  * B5 Restaurant Backend Server (Final & Complete Version)
  * Includes all features: All Frontends Support, Security, and Management APIs.
- * Patched Version: Fixes dashboard discount calculation bug.
+ * Patched Version: Fixes dashboard discount calculation bug and cashier sticky discount bug.
  */
 
 const express = require('express');
@@ -375,12 +375,11 @@ app.delete('/api/options/:id', authenticateToken, async (req, res) => {
 });
 
 
-// --- Dashboard API ---
-// ***** MODIFIED SECTION *****
+// --- Dashboard API (FIXED) ---
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
-        // 1. ดึงข้อมูลจากทั้ง 2 ชีตพร้อมกัน
+        // [FIX] ดึงข้อมูลจากทั้งชีต Orders และ Discounts เพื่อคำนวณส่วนลดให้ถูกต้อง
         const [ordersResponse, discountsResponse] = await Promise.all([
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:G' }),
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:C' })
@@ -412,11 +411,10 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
             } catch { return null; }
         };
 
-        // 2. สร้าง Map ของส่วนลดเพื่อให้ง่ายต่อการค้นหา
+        // [FIX] สร้าง Map ของส่วนลดทั้งหมดเพื่อใช้ในการอ้างอิงข้อมูล
         const discountsMap = discountRows.slice(1).reduce((map, row) => {
             const [tableName, discountPercentage] = row;
             if (tableName) {
-                // เก็บส่วนลดล่าสุดสำหรับโต๊ะนั้นๆ
                 map[tableName] = parseFloat(discountPercentage) || 0;
             }
             return map;
@@ -447,7 +445,7 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
                 
                 totalSales += subtotal;
 
-                // 3. คำนวณส่วนลดจาก discountsMap
+                // [FIX] คำนวณส่วนลดจาก subtotal และ % ส่วนลดที่หามาได้จาก Map
                 const discountPercentage = discountsMap[tableName] || 0;
                 if (discountPercentage > 0) {
                     const discountAmount = subtotal * (discountPercentage / 100);
@@ -473,7 +471,7 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
-// ***** END OF MODIFIED SECTION *****
+
 
 // --- KDS & POS APIs ---
 app.post('/api/orders', async (req, res) => {
@@ -524,41 +522,87 @@ app.post('/api/update-status', async (req, res) => {
     }
 });
 
+// --- Tables API for Cashier (FIXED) ---
 app.get('/api/tables', async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
         const [ordersResponse, discountsResponse] = await Promise.all([
             sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:F' }),
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:B' })
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:C' })
         ]);
+
         const orderRows = ordersResponse.data.values || [];
         const discountRows = discountsResponse.data.values || [];
-        const discountsMap = discountRows.slice(1).reduce((map, row) => {
-            if (row && row[0]) map[row[0]] = parseFloat(row[1]) || 0;
-            return map;
-        }, {});
-        if (orderRows.length <= 1) return res.json({ status: 'success', data: {} });
         
+        if (orderRows.length <= 1) return res.json({ status: 'success', data: {} });
+
+        const parseThaiDate = (thaiDateStr) => {
+            if (!thaiDateStr || !thaiDateStr.includes(' ')) return null;
+            try {
+                const [datePart, timePart] = thaiDateStr.split(' ');
+                const [day, month, year] = datePart.split('/').map(Number);
+                const [hours, minutes, seconds] = timePart.split(':').map(Number);
+                return new Date(year - 543, month - 1, day, hours, minutes, seconds);
+            } catch { return null; }
+        };
+
         const activeOrders = orderRows.slice(1).filter(row => row && row.length >= 6 && row[5]?.toLowerCase() !== 'paid');
         const tablesData = {};
+        const tableSessionStart = {}; // Object สำหรับเก็บเวลาเริ่มต้นของแต่ละโต๊ะที่ยังไม่จ่ายเงิน
+
+        // [FIX] 1. จัดกลุ่มออเดอร์ และค้นหา Timestamp ของออเดอร์แรกสุดของโต๊ะที่ยัง active อยู่
         activeOrders.forEach(row => {
             const table = row[1];
             if (!table) return;
-            if (!tablesData[table]) tablesData[table] = { tableName: table, orders: [], status: 'occupied' };
+
+            const orderTimestamp = parseThaiDate(row[0]);
+
+            if (!tablesData[table]) {
+                tablesData[table] = { tableName: table, orders: [], status: 'occupied' };
+                if (orderTimestamp) {
+                    tableSessionStart[table] = orderTimestamp; // เก็บเวลาของออเดอร์แรก
+                }
+            } else {
+                if (orderTimestamp && orderTimestamp < tableSessionStart[table]) {
+                    tableSessionStart[table] = orderTimestamp; // อัปเดตถ้าเจอออเดอร์ที่เก่ากว่า
+                }
+            }
+
             let items = [];
             try { items = JSON.parse(row[2]); } catch {}
             tablesData[table].orders.push(...items);
             if (row[5]?.toLowerCase() === 'billing') tablesData[table].status = 'billing';
         });
 
+        // [FIX] 2. สร้าง Map ของส่วนลดที่ "ถูกต้อง" โดยเช็คว่าเวลาของส่วนลดต้องเกิดหลังออเดอร์แรกของโต๊ะ
+        const validDiscountsMap = {};
+        discountRows.slice(1).forEach(row => {
+            const [tableName, discountPercentage, timestampStr] = row;
+            if (!tableName || !tableSessionStart[tableName]) return; 
+
+            const discountTimestamp = parseThaiDate(timestampStr);
+            if (discountTimestamp && discountTimestamp >= tableSessionStart[tableName]) {
+                validDiscountsMap[tableName] = parseFloat(discountPercentage) || 0;
+            }
+        });
+
+        // [FIX] 3. คำนวณยอดรวมโดยใช้ส่วนลดจาก Map ที่กรองแล้ว
         for (const tableName in tablesData) {
             const subtotal = tablesData[tableName].orders.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
-            const discountPercentage = discountsMap[tableName] || 0;
+            const discountPercentage = validDiscountsMap[tableName] || 0; // ใช้ Map ที่ถูกต้อง
             const discountAmount = subtotal * (discountPercentage / 100);
-            tablesData[tableName] = { ...tablesData[tableName], subtotal, discountPercentage, discountAmount, total: subtotal - discountAmount };
+            tablesData[tableName] = { 
+                ...tablesData[tableName], 
+                subtotal, 
+                discountPercentage, 
+                discountAmount, 
+                total: subtotal - discountAmount 
+            };
         }
+        
         res.json({ status: 'success', data: tablesData });
     } catch (error) {
+        console.error('Failed to fetch table statuses:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch table statuses.' });
     }
 });
@@ -575,7 +619,6 @@ app.get('/api/all-tables', async (req, res) => {
     }
 });
 
-// ***** MODIFIED SECTION *****
 app.post('/api/clear-table', async (req, res) => {
     try {
         const { tableName } = req.body;
@@ -595,7 +638,7 @@ app.post('/api/clear-table', async (req, res) => {
             await sheets.spreadsheets.values.batchUpdate({ spreadsheetId, resource: { valueInputOption: 'USER_ENTERED', data: requests } });
         }
         
-        // โค้ดที่เพิ่มส่วนลด 0% ถูกลบออกจากส่วนนี้แล้ว
+        // [FIX] โค้ดที่เพิ่มส่วนลด 0% ถูกลบออกจากส่วนนี้แล้ว เพื่อให้ Dashboard คำนวณประวัติได้ถูกต้อง
         
         broadcast({ type: 'TABLE_CLEARED', payload: { tableName } });
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
@@ -603,7 +646,6 @@ app.post('/api/clear-table', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to clear table.' });
     }
 });
-// ***** END OF MODIFIED SECTION *****
 
 app.post('/api/request-bill', async (req, res) => {
     try {
@@ -639,7 +681,7 @@ app.get('/api/order-status', async (req, res) => {
         const rows = response.data.values || [];
         if (rows.length <= 1) return res.json({ status: 'success', data: [] });
 
-        const activeStatuses = new Set(['paid']); // <<<< ****** THIS IS THE CHANGE ******
+        const activeStatuses = new Set(['paid']);
         const activeOrders = rows.slice(1).map((row, index) => {
             if (row[1] !== table || activeStatuses.has(row[5]?.toLowerCase())) return null;
             let items = [];
