@@ -1,6 +1,7 @@
 /**
  * B5 Restaurant Backend Server (Final & Complete Version)
  * Includes all features: All Frontends Support, Security, and Management APIs.
+ * Patched Version: Fixes dashboard discount calculation bug.
  */
 
 const express = require('express');
@@ -375,11 +376,19 @@ app.delete('/api/options/:id', authenticateToken, async (req, res) => {
 
 
 // --- Dashboard API ---
+// ***** MODIFIED SECTION *****
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
     try {
         const sheets = await getGoogleSheetsClient();
-        const ordersResponse = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:G' });
+        // 1. ดึงข้อมูลจากทั้ง 2 ชีตพร้อมกัน
+        const [ordersResponse, discountsResponse] = await Promise.all([
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:G' }),
+            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:C' })
+        ]);
+
         const orderRows = ordersResponse.data.values || [];
+        const discountRows = discountsResponse.data.values || [];
+
         if (orderRows.length <= 1) return res.json({ status: 'success', data: {} });
 
         const { startDate: startDateQuery, endDate: endDateQuery } = req.query;
@@ -403,27 +412,48 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
             } catch { return null; }
         };
 
+        // 2. สร้าง Map ของส่วนลดเพื่อให้ง่ายต่อการค้นหา
+        const discountsMap = discountRows.slice(1).reduce((map, row) => {
+            const [tableName, discountPercentage] = row;
+            if (tableName) {
+                // เก็บส่วนลดล่าสุดสำหรับโต๊ะนั้นๆ
+                map[tableName] = parseFloat(discountPercentage) || 0;
+            }
+            return map;
+        }, {});
+        
         const paidOrdersInRange = orderRows.slice(1).filter(row => {
             if (!row || row.length < 6 || row[5]?.toLowerCase() !== 'paid') return false;
             const orderDate = parseThaiDate(row[0]);
             return orderDate && orderDate >= startDate && orderDate <= endDate;
         });
 
-        let totalSales = 0, totalOrders = paidOrdersInRange.length;
+        let totalSales = 0, totalDiscount = 0, totalOrders = paidOrdersInRange.length;
         const itemSales = {}, salesByCategory = {}, salesByDay = {}, salesByHour = Array(24).fill(0);
 
         paidOrdersInRange.forEach(row => {
             try {
                 const orderDate = parseThaiDate(row[0]);
+                const tableName = row[1];
                 const items = JSON.parse(row[2]);
                 let subtotal = 0;
+
                 items.forEach(item => {
                     const itemTotal = (item.price || 0) * (item.quantity || 1);
                     subtotal += itemTotal;
                     itemSales[item.name_th || 'Unknown'] = (itemSales[item.name_th || 'Unknown'] || 0) + item.quantity;
                     salesByCategory[item.category_th || 'Uncategorized'] = (salesByCategory[item.category_th || 'Uncategorized'] || 0) + itemTotal;
                 });
+                
                 totalSales += subtotal;
+
+                // 3. คำนวณส่วนลดจาก discountsMap
+                const discountPercentage = discountsMap[tableName] || 0;
+                if (discountPercentage > 0) {
+                    const discountAmount = subtotal * (discountPercentage / 100);
+                    totalDiscount += discountAmount;
+                }
+
                 if (orderDate) {
                     salesByHour[orderDate.getHours()] += subtotal;
                     const dayKey = orderDate.toISOString().split('T')[0];
@@ -432,7 +462,6 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
             } catch {}
         });
         
-        const totalDiscount = paidOrdersInRange.reduce((sum, row) => sum + (parseFloat(row[6]) || 0), 0);
         const netRevenue = totalSales - totalDiscount;
         const averageOrderValue = totalOrders > 0 ? netRevenue / totalOrders : 0; 
         const topSellingItems = Object.entries(itemSales).sort(([, a], [, b]) => b - a).slice(0, 5).map(([name, quantity]) => ({ name, quantity }));
@@ -440,9 +469,11 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
 
         res.json({ status: 'success', data: { kpis: { totalSales, totalDiscount, netRevenue, totalOrders, averageOrderValue }, topSellingItems, salesByCategory, salesByDay: sortedSalesByDay, salesByHour } });
     } catch (error) {
+        console.error("Dashboard data error:", error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
+// ***** END OF MODIFIED SECTION *****
 
 // --- KDS & POS APIs ---
 app.post('/api/orders', async (req, res) => {
@@ -544,6 +575,7 @@ app.get('/api/all-tables', async (req, res) => {
     }
 });
 
+// ***** MODIFIED SECTION *****
 app.post('/api/clear-table', async (req, res) => {
     try {
         const { tableName } = req.body;
@@ -563,8 +595,7 @@ app.post('/api/clear-table', async (req, res) => {
             await sheets.spreadsheets.values.batchUpdate({ spreadsheetId, resource: { valueInputOption: 'USER_ENTERED', data: requests } });
         }
         
-        const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-        await sheets.spreadsheets.values.append({ spreadsheetId, range: 'Discounts!A:C', valueInputOption: 'USER_ENTERED', resource: { values: [[tableName, 0, timestamp]] } });
+        // โค้ดที่เพิ่มส่วนลด 0% ถูกลบออกจากส่วนนี้แล้ว
         
         broadcast({ type: 'TABLE_CLEARED', payload: { tableName } });
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
@@ -572,6 +603,7 @@ app.post('/api/clear-table', async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to clear table.' });
     }
 });
+// ***** END OF MODIFIED SECTION *****
 
 app.post('/api/request-bill', async (req, res) => {
     try {
