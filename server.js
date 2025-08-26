@@ -1,12 +1,13 @@
-// --- การตั้งค่าเริ่มต้น ---
-require('dotenv').config(); // สำหรับอ่านค่าจากไฟล์ .env
+// =================================================================
+// --- การตั้งค่าเริ่มต้น (Boilerplate & Setup) ---
+// =================================================================
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
-const { WebSocketServer } = require('ws'); // <<< หมายเหตุ: ส่วนนี้จะถูกลบออกในอนาคตเมื่อใช้ Supabase Realtime เต็มรูปแบบ
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const { Pool } = require('pg'); // ไลบรารีสำหรับเชื่อมต่อ PostgreSQL
+const { Pool } = require('pg');
 
 const app = express();
 const server = http.createServer(app);
@@ -15,7 +16,9 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// --- การเชื่อมต่อฐานข้อมูล (Supabase) ---
+// =================================================================
+// --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
+// =================================================================
 const dbHost = process.env.SUPABASE_DB_HOST;
 const dbKey = process.env.SUPABASE_DB_KEY;
 const connectionString = `postgresql://postgres:${dbKey}@${dbHost}:6543/postgres`;
@@ -24,26 +27,9 @@ const pool = new Pool({
   connectionString,
 });
 
-// --- WebSocket (จะถูกแทนที่ด้วย Supabase Realtime) ---
-const wss = new WebSocketServer({ server });
-const clients = new Set();
-
-function broadcast(data) {
-    const message = JSON.stringify(data);
-    clients.forEach(client => {
-        if (client.readyState === client.OPEN) {
-            client.send(message);
-        }
-    });
-}
-wss.on('connection', (ws) => {
-    clients.add(ws);
-    ws.on('close', () => clients.delete(ws));
-    ws.on('error', (error) => console.error('WebSocket Error:', error));
-});
-
-
-// --- Authentication Middleware & Config ---
+// =================================================================
+// --- Middleware & Configs ---
+// =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // Middleware สำหรับตรวจสอบ Token
@@ -51,13 +37,13 @@ function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     if (token == null) return res.sendStatus(401);
+
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) return res.sendStatus(403);
         req.user = user;
         next();
     });
 }
-
 
 // =================================================================
 // --- API Endpoints ---
@@ -66,7 +52,6 @@ function authenticateToken(req, res, next) {
 app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running with Supabase!'));
 
 // --- Login API ---
-// [อัปเกรด] เปลี่ยนมาตรวจสอบข้อมูลจากตาราง users
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -78,9 +63,8 @@ app.post('/api/login', async (req, res) => {
         const user = result.rows[0];
 
         if (user) {
-            // ใช้ bcrypt.compare เพื่อเทียบรหัสผ่านที่ hash ไว้
+            // หมายเหตุ: ในระบบจริงควรใช้ bcrypt.compare เพื่อเทียบรหัสผ่านที่ hash ไว้
             // const match = await bcrypt.compare(password, user.password_hash);
-            // หมายเหตุ: เนื่องจากเรายังไม่มีระบบสร้าง hash ตอนย้ายข้อมูล ขออนุญาตเทียบรหัสผ่านตรงๆ ไปก่อน
             const match = (password === user.password_hash); 
             
             if (match) {
@@ -99,9 +83,32 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// --- Category Management APIs ---
+app.get('/api/categories', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM categories ORDER BY name_th');
+        res.json({ status: 'success', data: result.rows });
+    } catch (error) {
+        console.error('Failed to fetch categories:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
+    }
+});
+
+app.post('/api/categories', authenticateToken, async (req, res) => {
+    try {
+        const { name_th, name_en } = req.body;
+        const result = await pool.query(
+            'INSERT INTO categories (name_th, name_en) VALUES ($1, $2) RETURNING *',
+            [name_th, name_en]
+        );
+        res.status(201).json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Failed to create category:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to create category.' });
+    }
+});
 
 // --- Menu & Options APIs ---
-// [อัปเกรด] ดึงข้อมูลจากตาราง menu_items และ menu_options
 app.get('/api/menu', async (req, res) => {
     try {
         const menuQuery = `
@@ -111,37 +118,31 @@ app.get('/api/menu', async (req, res) => {
             ORDER BY c.name_th, mi.name_th;
         `;
         const optionsQuery = 'SELECT * FROM menu_options;';
+        const menuOptionsLinkQuery = 'SELECT * FROM menu_item_option_sets;';
 
-        const [menuResult, optionsResult] = await Promise.all([
+        const [menuResult, optionsResult, menuOptionsLinkResult] = await Promise.all([
             pool.query(menuQuery),
-            pool.query(optionsQuery)
+            pool.query(optionsQuery),
+            pool.query(menuOptionsLinkQuery)
         ]);
-
-        const menuRows = menuResult.rows;
-        const optionRows = optionsResult.rows;
-
-        // ส่วนนี้เป็นการจัดกลุ่ม Options คล้ายโค้ดเดิม
-        const optionsMap = optionRows.reduce((map, row) => {
+        
+        const optionsMap = optionsResult.rows.reduce((map, row) => {
             const { option_set_id, id, label_th, label_en, price_add } = row;
             if (!map[option_set_id]) map[option_set_id] = [];
             map[option_set_id].push({ option_id: id, label_th, label_en, price_add: parseFloat(price_add) });
             return map;
         }, {});
 
-        // เราต้องดึงข้อมูลการเชื่อมโยง menu กับ options set มาอีกที
-        const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets');
         const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
             if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
             map[row.menu_item_id].push(row.option_set_id);
             return map;
         }, {});
         
-        const menuData = menuRows.map(item => {
+        const menuData = menuResult.rows.map(item => {
             const optionSetIds = menuOptionsLink[item.id] || [];
             item.option_groups = optionSetIds.reduce((groups, id) => {
-                if (optionsMap[id]) {
-                    groups[id] = optionsMap[id];
-                }
+                if (optionsMap[id]) groups[id] = optionsMap[id];
                 return groups;
             }, {});
             return item;
@@ -162,16 +163,46 @@ app.post('/api/menu-items', authenticateToken, async (req, res) => {
         }
         const query = `
             INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id;
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en || null, desc_th || null, desc_en || null, image_url || null, stock_status || 'in_stock'];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock'];
         const result = await pool.query(query, values);
-
-        res.status(201).json({ status: 'success', message: 'เพิ่มเมนูสำเร็จ!', data: { id: result.rows[0].id } });
+        res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
         console.error('Failed to create menu item:', error);
         res.status(500).json({ status: 'error', message: 'Failed to create menu item.' });
+    }
+});
+
+app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
+        const query = `
+            UPDATE menu_items 
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8
+            WHERE id = $9 RETURNING *;
+        `;
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, id];
+        const result = await pool.query(query, values);
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Failed to update menu item:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to update menu item.' });
+    }
+});
+
+app.post('/api/update-stock', authenticateToken, async (req, res) => {
+    try {
+        const { itemId, stockStatus } = req.body;
+        const result = await pool.query(
+            'UPDATE menu_items SET stock_status = $1 WHERE id = $2 RETURNING *',
+            [stockStatus, itemId]
+        );
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Failed to update stock status:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to update stock status.' });
     }
 });
 
@@ -179,46 +210,22 @@ app.post('/api/menu-items', authenticateToken, async (req, res) => {
 app.post('/api/orders', async (req, res) => {
     try {
         const { cart, total, tableNumber, specialRequest, subtotal, discountPercentage, discountAmount } = req.body;
-        
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending')
-            RETURNING *;
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *;
         `;
-        
-        const values = [
-            tableNumber || 'N/A',
-            JSON.stringify(cart), // แปลง Array/Object เป็น JSON string ก่อนเก็บ
-            subtotal,
-            discountPercentage || 0,
-            discountAmount || 0,
-            total,
-            specialRequest || ''
-        ];
-
+        const values = [tableNumber || 'N/A', JSON.stringify(cart), subtotal, discountPercentage || 0, discountAmount || 0, total, specialRequest || ''];
         const result = await pool.query(query, values);
-        const newOrder = result.rows[0];
-
-        // [อัปเกรด] Supabase Realtime จะทำงานแทนส่วนนี้ในอนาคต
-        broadcast({ 
-            type: 'NEW_ORDER', 
-            payload: { 
-                id: newOrder.id, 
-                timestamp: newOrder.created_at, 
-                table: newOrder.table_name, 
-                items: newOrder.items, // ข้อมูล items เป็น JSON อยู่แล้ว
-                special_request: newOrder.special_request, 
-                status: newOrder.status 
-            } 
-        });
-
-        res.status(201).json({ status: 'success', message: 'Order created successfully!', data: newOrder });
+        
+        // หมายเหตุ: การแจ้งเตือนจะถูกจัดการโดย Supabase Realtime ที่ฝั่ง Frontend
+        // Frontend จะ subscribe การเปลี่ยนแปลงของตาราง orders
+        
+        res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
         console.error('Failed to create order:', error);
         res.status(500).json({ status: 'error', message: 'Failed to create order.' });
     }
 });
-
 
 // --- KDS & POS APIs ---
 app.get('/api/get-orders', async (req, res) => {
@@ -236,27 +243,19 @@ app.get('/api/get-orders', async (req, res) => {
     }
 });
 
-app.post('/api/update-status', async (req, res) => {
+app.post('/api/update-status', authenticateToken, async (req, res) => {
     try {
-        const { orderId, newStatus } = req.body; // เปลี่ยนจาก rowNumber เป็น orderId
-        if (!orderId || !newStatus) return res.status(400).json({ status: 'error', message: 'Missing orderId or newStatus' });
-        
-        const query = 'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *;';
-        const result = await pool.query(query, [newStatus, orderId]);
-        
+        const { orderId, newStatus } = req.body;
+        const result = await pool.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
         if (result.rowCount === 0) {
             return res.status(404).json({ status: 'error', message: 'Order not found' });
         }
-        
-        // [อัปเกรด] Supabase Realtime จะทำงานแทนส่วนนี้
-        broadcast({ type: 'STATUS_UPDATE', payload: { orderId, newStatus } });
-        res.json({ status: 'success', message: `Order status updated`, data: result.rows[0] });
+        res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
         console.error('Failed to update status:', error);
         res.status(500).json({ status: 'error', message: 'Failed to update status.' });
     }
 });
-
 
 // --- Table Management APIs for Cashier ---
 app.get('/api/tables', async (req, res) => {
@@ -264,7 +263,7 @@ app.get('/api/tables', async (req, res) => {
         const query = `
             SELECT 
                 table_name, 
-                json_agg(items) as all_items, 
+                json_agg(items ORDER BY created_at) as all_items, 
                 SUM(subtotal) as subtotal,
                 SUM(discount_amount) as discount_amount,
                 SUM(total) as total,
@@ -274,22 +273,17 @@ app.get('/api/tables', async (req, res) => {
             GROUP BY table_name;
         `;
         const result = await pool.query(query);
-
-        // จัดรูปแบบข้อมูลให้เหมือนของเดิม
         const tablesData = result.rows.reduce((acc, row) => {
-            const orders = row.all_items.flat();
             acc[row.table_name] = {
                 tableName: row.table_name,
-                orders: orders,
+                orders: row.all_items.flat(),
                 status: row.is_billing ? 'Billing' : 'Occupied',
                 subtotal: parseFloat(row.subtotal),
                 discountAmount: parseFloat(row.discount_amount),
                 total: parseFloat(row.total),
-                discountPercentage: (parseFloat(row.discount_amount) / parseFloat(row.subtotal)) * 100 || 0
             };
             return acc;
         }, {});
-        
         res.json({ status: 'success', data: tablesData });
     } catch (error) {
         console.error('Failed to fetch table statuses:', error);
@@ -300,17 +294,7 @@ app.get('/api/tables', async (req, res) => {
 app.post('/api/clear-table', authenticateToken, async (req, res) => {
     try {
         const { tableName } = req.body;
-        if (!tableName) return res.status(400).json({ status: 'error', message: 'Missing tableName' });
-
-        const query = `
-            UPDATE orders 
-            SET status = 'Paid' 
-            WHERE table_name = $1 AND status != 'Paid';
-        `;
-        await pool.query(query, [tableName]);
-
-        // [อัปเกรด] Supabase Realtime จะทำงานแทนส่วนนี้
-        broadcast({ type: 'TABLE_CLEARED', payload: { tableName } });
+        await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
     } catch (error) {
         console.error('Failed to clear table:', error);
@@ -318,8 +302,42 @@ app.post('/api/clear-table', authenticateToken, async (req, res) => {
     }
 });
 
+// --- Dashboard API ---
+app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+    try {
+        const { date } = req.query; // format: YYYY-MM-DD
+        if (!date) {
+            return res.status(400).json({ status: 'error', message: 'Date query parameter is required.' });
+        }
+        
+        // ::date casts the timestamp to a date for comparison
+        const query = "SELECT * FROM orders WHERE created_at::date = $1 AND status = 'Paid'";
+        const result = await pool.query(query, [date]);
+        
+        const paidOrders = result.rows;
+        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+        const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
+        
+        res.json({
+            status: 'success',
+            data: {
+                date: date,
+                totalSales: totalSales,
+                totalDiscount: totalDiscount,
+                totalOrders: paidOrders.length,
+                orders: paidOrders
+            }
+        });
+    } catch (error) {
+        console.error('Failed to fetch dashboard data:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
+    }
+});
 
-// --- เริ่มการทำงานของ Server ---
+
+// =================================================================
+// --- Server Start ---
+// =================================================================
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
