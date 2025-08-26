@@ -18,13 +18,10 @@ app.use(express.json());
 
 // =================================================================
 // --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
+// --- [แก้ไขล่าสุด] ใช้ DATABASE_URL เพียงตัวเดียวเพื่อความถูกต้อง ---
 // =================================================================
-const dbHost = process.env.SUPABASE_DB_HOST;
-const dbKey = process.env.SUPABASE_DB_KEY;
-const connectionString = `postgresql://postgres:${dbKey}@${dbHost}:6543/postgres`;
-
 const pool = new Pool({
-  connectionString,
+  connectionString: process.env.DATABASE_URL,
 });
 
 // =================================================================
