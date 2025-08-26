@@ -1,5 +1,5 @@
 // =================================================================
-// --- การตั้งค่าเริ่มต้น (Boilerplate & Setup) ---
+// --- Boilerplate & Setup ---
 // =================================================================
 require('dotenv').config();
 const express = require('express');
@@ -17,14 +17,12 @@ app.use(cors());
 app.use(express.json());
 
 // =================================================================
-// --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
+// --- Database Connection ---
 // =================================================================
-         const pool = new Pool({
-           connectionString: process.env.DATABASE_URL,
-  // เพิ่ม option นี้เข้าไป
-  // เพื่อป้องกัน connection หลุดเมื่อฐานข้อมูล sleep
-           idleTimeoutMillis: 0,
-           connectionTimeoutMillis: 0,
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  idleTimeoutMillis: 0,
+  connectionTimeoutMillis: 0,
 });
 
 // =================================================================
@@ -32,7 +30,7 @@ app.use(express.json());
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
+// Middleware for Token and Role Authentication (Upgraded Version)
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
@@ -42,13 +40,13 @@ function authenticateToken(...allowedRoles) {
         jwt.verify(token, JWT_SECRET, (err, user) => {
             if (err) return res.sendStatus(403); // Forbidden (invalid token)
 
-            // Admin สามารถเข้าถึงได้ทุก API ที่มีการป้องกัน
+            // Admin can access any protected API
             if (user.role === 'admin') {
                 req.user = user;
                 return next();
             }
 
-            // ตรวจสอบว่า role ของผู้ใช้ อยู่ในรายการที่ได้รับอนุญาตหรือไม่
+            // Check if the user's role is in the list of allowed roles
             if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
                 return res.sendStatus(403); // Forbidden (insufficient permissions)
             }
@@ -63,35 +61,9 @@ function authenticateToken(...allowedRoles) {
 // --- API Endpoints ---
 // =================================================================
 
-// --- Public Endpoints (ไม่ต้อง Login) ---
+// --- Public Endpoints ---
 app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running with Supabase!'));
-app.get('/api/menu', async (req, res) => { /* ... โค้ดดึงเมนู ... */ });
-app.get('/api/categories', async (req, res) => { /* ... โค้ดดึงหมวดหมู่ ... */ });
-app.post('/api/orders', async (req, res) => { /* ... โค้ดสร้างออเดอร์ ... */ });
-app.post('/api/login', async (req, res) => { /* ... โค้ดล็อกอิน ... */ });
 
-// --- Admin Endpoints (เฉพาะ Admin) ---
-app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => { /* ... โค้ดเพิ่มเมนู ... */ });
-app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => { /* ... โค้ดแก้ไขเมนู ... */ });
-app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => { /* ... โค้ดอัปเดตสต็อก ... */ });
-app.post('/api/categories', authenticateToken('admin'), async (req, res) => { /* ... โค้ดเพิ่มหมวดหมู่ ... */ });
-app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => { /* ... โค้ดดู Dashboard ... */ });
-
-
-// --- Kitchen Endpoints (สำหรับ Kitchen และ Admin) ---
-app.get('/api/get-orders', authenticateToken('kitchen'), async (req, res) => { /* ... โค้ดดึงออเดอร์สำหรับ KDS ... */ });
-app.post('/api/update-status', authenticateToken('kitchen'), async (req, res) => { /* ... โค้ดอัปเดตสถานะออเดอร์ ... */ });
-
-// --- Cashier Endpoints (สำหรับ Cashier และ Admin) ---
-app.get('/api/tables', authenticateToken('cashier'), async (req, res) => { /* ... โค้ดดูสถานะโต๊ะ ... */ });
-app.post('/api/clear-table', authenticateToken('cashier'), async (req, res) => { /* ... โค้ดเคลียร์โต๊ะ ... */ });
-
-
-// =================================================================
-// --- Logic for Endpoints (โค้ดเต็ม) ---
-// =================================================================
-
-// --- Login API ---
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -118,7 +90,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- Category Management APIs ---
 app.get('/api/categories', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM categories ORDER BY sort_order ASC');
@@ -129,38 +100,20 @@ app.get('/api/categories', async (req, res) => {
     }
 });
 
-app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
-    try {
-        const { name_th, name_en, sort_order } = req.body;
-        const result = await pool.query(
-            'INSERT INTO categories (name_th, name_en, sort_order) VALUES ($1, $2, $3) RETURNING *',
-            [name_th, name_en, sort_order]
-        );
-        res.status(201).json({ status: 'success', data: result.rows[0] });
-    } catch (error) {
-        console.error('Failed to create category:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to create category.' });
-    }
-});
-
-// --- Menu & Options APIs ---
 app.get('/api/menu', async (req, res) => {
     try {
+        // Step 1: Fetch main menu items and categories
         const menuQuery = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             FROM menu_items mi
             LEFT JOIN categories c ON mi.category_id = c.id
             ORDER BY c.sort_order ASC, mi.name_th ASC;
         `;
-        const optionsQuery = 'SELECT * FROM menu_options;';
-        const menuOptionsLinkQuery = 'SELECT * FROM menu_item_option_sets;';
+        const menuResult = await pool.query(menuQuery);
+        let menuData = menuResult.rows;
 
-        const [menuResult, optionsResult, menuOptionsLinkResult] = await Promise.all([
-            pool.query(menuQuery),
-            pool.query(optionsQuery),
-            pool.query(menuOptionsLinkQuery)
-        ]);
-        
+        // Step 2: Fetch all options
+        const optionsResult = await pool.query('SELECT * FROM menu_options;');
         const optionsMap = optionsResult.rows.reduce((map, row) => {
             const { option_set_id, id, label_th, label_en, price_add } = row;
             if (!map[option_set_id]) map[option_set_id] = [];
@@ -168,13 +121,16 @@ app.get('/api/menu', async (req, res) => {
             return map;
         }, {});
 
+        // Step 3: Fetch the link data
+        const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets;');
         const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
             if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
             map[row.menu_item_id].push(row.option_set_id);
             return map;
         }, {});
-        
-        const menuData = menuResult.rows.map(item => {
+
+        // Step 4: Assemble options into each menu item
+        menuData = menuData.map(item => {
             const optionSetIds = menuOptionsLink[item.id] || [];
             item.option_groups = optionSetIds.reduce((groups, id) => {
                 if (optionsMap[id]) groups[id] = optionsMap[id];
@@ -184,12 +140,31 @@ app.get('/api/menu', async (req, res) => {
         });
 
         res.json({ status: 'success', data: menuData });
+
     } catch (error) {
         console.error('Error fetching menu with options:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
     }
 });
 
+app.post('/api/orders', async (req, res) => {
+    try {
+        const { cart, total, tableNumber, specialRequest, subtotal, discountPercentage, discountAmount } = req.body;
+        const query = `
+            INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *;
+        `;
+        const values = [tableNumber || 'N/A', JSON.stringify(cart), subtotal, discountPercentage || 0, discountAmount || 0, total, specialRequest || ''];
+        const result = await pool.query(query, values);
+        res.status(201).json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Failed to create order:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to create order.' });
+    }
+});
+
+
+// --- Admin Endpoints ---
 app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
@@ -240,24 +215,50 @@ app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-// --- Orders API ---
-app.post('/api/orders', async (req, res) => {
+app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
-        const { cart, total, tableNumber, specialRequest, subtotal, discountPercentage, discountAmount } = req.body;
-        const query = `
-            INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *;
-        `;
-        const values = [tableNumber || 'N/A', JSON.stringify(cart), subtotal, discountPercentage || 0, discountAmount || 0, total, specialRequest || ''];
-        const result = await pool.query(query, values);
+        const { name_th, name_en, sort_order } = req.body;
+        const result = await pool.query(
+            'INSERT INTO categories (name_th, name_en, sort_order) VALUES ($1, $2, $3) RETURNING *',
+            [name_th, name_en, sort_order]
+        );
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
-        console.error('Failed to create order:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to create order.' });
+        console.error('Failed to create category:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to create category.' });
     }
 });
 
-// --- KDS & POS APIs ---
+app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { date } = req.query; // format: YYYY-MM-DD
+        if (!date) return res.status(400).json({ status: 'error', message: 'Date query parameter is required.' });
+        
+        const query = "SELECT * FROM orders WHERE created_at::date = $1 AND status = 'Paid'";
+        const result = await pool.query(query, [date]);
+        
+        const paidOrders = result.rows;
+        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+        const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
+        
+        res.json({
+            status: 'success',
+            data: {
+                date: date,
+                totalSales: totalSales,
+                totalDiscount: totalDiscount,
+                totalOrders: paidOrders.length,
+                orders: paidOrders
+            }
+        });
+    } catch (error) {
+        console.error('Failed to fetch dashboard data:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
+    }
+});
+
+
+// --- Kitchen Endpoints ---
 app.get('/api/get-orders', authenticateToken('kitchen'), async (req, res) => {
     try {
         const query = `
@@ -287,7 +288,7 @@ app.post('/api/update-status', authenticateToken('kitchen'), async (req, res) =>
     }
 });
 
-// --- Table Management APIs for Cashier ---
+// --- Cashier Endpoints ---
 app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
     try {
         const query = `
@@ -329,35 +330,6 @@ app.post('/api/clear-table', authenticateToken('cashier'), async (req, res) => {
     } catch (error) {
         console.error('Failed to clear table:', error);
         res.status(500).json({ status: 'error', message: 'Failed to clear table.' });
-    }
-});
-
-// --- Dashboard API ---
-app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
-    try {
-        const { date } = req.query; // format: YYYY-MM-DD
-        if (!date) return res.status(400).json({ status: 'error', message: 'Date query parameter is required.' });
-        
-        const query = "SELECT * FROM orders WHERE created_at::date = $1 AND status = 'Paid'";
-        const result = await pool.query(query, [date]);
-        
-        const paidOrders = result.rows;
-        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
-        const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
-        
-        res.json({
-            status: 'success',
-            data: {
-                date: date,
-                totalSales: totalSales,
-                totalDiscount: totalDiscount,
-                totalOrders: paidOrders.length,
-                orders: paidOrders
-            }
-        });
-    } catch (error) {
-        console.error('Failed to fetch dashboard data:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
 
