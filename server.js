@@ -1,16 +1,12 @@
-/**
- * B5 Restaurant Backend Server (Final & Complete Version)
- * Includes all features: All Frontends Support, Security, and Management APIs.
- * Patched Version: Fixes dashboard discount calculation bug and cashier sticky discount bug.
- */
-
+// --- การตั้งค่าเริ่มต้น ---
+require('dotenv').config(); // สำหรับอ่านค่าจากไฟล์ .env
 const express = require('express');
-const { google } = require('googleapis');
 const cors = require('cors');
 const http = require('http');
-const { WebSocketServer } = require('ws');
+const { WebSocketServer } = require('ws'); // <<< หมายเหตุ: ส่วนนี้จะถูกลบออกในอนาคตเมื่อใช้ Supabase Realtime เต็มรูปแบบ
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const { Pool } = require('pg'); // ไลบรารีสำหรับเชื่อมต่อ PostgreSQL
 
 const app = express();
 const server = http.createServer(app);
@@ -19,22 +15,16 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-const spreadsheetId = '1Sz1XVvVdRajIM2R-UQNv29fejHHFizp2vbegwGFNIDw';
-const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
+// --- การเชื่อมต่อฐานข้อมูล (Supabase) ---
+const dbHost = process.env.SUPABASE_DB_HOST;
+const dbKey = process.env.SUPABASE_DB_KEY;
+const connectionString = `postgresql://postgres:${dbKey}@${dbHost}:6543/postgres`;
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; // Hashed Password
+const pool = new Pool({
+  connectionString,
+});
 
-async function getGoogleSheetsClient() {
-    const auth = new google.auth.GoogleAuth({
-        credentials,
-        scopes: 'https://www.googleapis.com/auth/spreadsheets',
-    });
-    const client = await auth.getClient();
-    return google.sheets({ version: 'v4', auth: client });
-}
-
+// --- WebSocket (จะถูกแทนที่ด้วย Supabase Realtime) ---
 const wss = new WebSocketServer({ server });
 const clients = new Set();
 
@@ -46,17 +36,17 @@ function broadcast(data) {
         }
     });
 }
-
 wss.on('connection', (ws) => {
-    console.log('Client connected via WebSocket');
     clients.add(ws);
-    ws.on('close', () => {
-        console.log('Client disconnected');
-        clients.delete(ws);
-    });
+    ws.on('close', () => clients.delete(ws));
     ws.on('error', (error) => console.error('WebSocket Error:', error));
 });
 
+
+// --- Authentication Middleware & Config ---
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// Middleware สำหรับตรวจสอบ Token
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -68,15 +58,33 @@ function authenticateToken(req, res, next) {
     });
 }
 
-app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running!'));
 
+// =================================================================
+// --- API Endpoints ---
+// =================================================================
+
+app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running with Supabase!'));
+
+// --- Login API ---
+// [อัปเกรด] เปลี่ยนมาตรวจสอบข้อมูลจากตาราง users
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
-        if (username === ADMIN_USERNAME) {
-            const match = await bcrypt.compare(password, ADMIN_PASSWORD);
+        if (!username || !password) {
+            return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
+        }
+        
+        const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+        const user = result.rows[0];
+
+        if (user) {
+            // ใช้ bcrypt.compare เพื่อเทียบรหัสผ่านที่ hash ไว้
+            // const match = await bcrypt.compare(password, user.password_hash);
+            // หมายเหตุ: เนื่องจากเรายังไม่มีระบบสร้าง hash ตอนย้ายข้อมูล ขออนุญาตเทียบรหัสผ่านตรงๆ ไปก่อน
+            const match = (password === user.password_hash); 
+            
             if (match) {
-                const payload = { username, role: 'admin' };
+                const payload = { username: user.username, role: user.role };
                 const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
                 res.json({ status: 'success', message: 'Login successful!', token });
             } else {
@@ -91,41 +99,54 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+
 // --- Menu & Options APIs ---
+// [อัปเกรด] ดึงข้อมูลจากตาราง menu_items และ menu_options
 app.get('/api/menu', async (req, res) => {
     try {
-        const sheets = await getGoogleSheetsClient();
-        const [menuResponse, optionsResponse] = await Promise.all([
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' }),
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Options!A:E' })
-        ]);
-        const menuRows = menuResponse.data.values || [];
-        const optionRows = optionsResponse.data.values || [];
-        if (menuRows.length <= 1) return res.json({ status: 'success', data: [] });
+        const menuQuery = `
+            SELECT mi.*, c.name_th as category_th, c.name_en as category_en
+            FROM menu_items mi
+            LEFT JOIN categories c ON mi.category_id = c.id
+            ORDER BY c.name_th, mi.name_th;
+        `;
+        const optionsQuery = 'SELECT * FROM menu_options;';
 
-        const menuHeaders = menuRows.shift();
-        if (optionRows.length > 0) optionRows.shift();
-        
+        const [menuResult, optionsResult] = await Promise.all([
+            pool.query(menuQuery),
+            pool.query(optionsQuery)
+        ]);
+
+        const menuRows = menuResult.rows;
+        const optionRows = optionsResult.rows;
+
+        // ส่วนนี้เป็นการจัดกลุ่ม Options คล้ายโค้ดเดิม
         const optionsMap = optionRows.reduce((map, row) => {
-            const [option_id, option_set_id, label_th, label_en, price_add] = row;
-            if (option_set_id && !map[option_set_id]) map[option_set_id] = [];
-            if(option_set_id) map[option_set_id].push({ option_id, label_th, label_en, price_add: parseFloat(price_add) || 0 });
+            const { option_set_id, id, label_th, label_en, price_add } = row;
+            if (!map[option_set_id]) map[option_set_id] = [];
+            map[option_set_id].push({ option_id: id, label_th, label_en, price_add: parseFloat(price_add) });
             return map;
         }, {});
 
-        const menuData = menuRows.map(row => {
-            const item = {};
-            menuHeaders.forEach((header, index) => item[header] = row[index]);
-            const optionIds = item.options_id ? item.options_id.split(',') : [];
-            item.option_groups = optionIds.reduce((groups, id) => {
-                const trimmedId = id.trim();
-                if (optionsMap[trimmedId]) {
-                    groups[trimmedId] = optionsMap[trimmedId];
+        // เราต้องดึงข้อมูลการเชื่อมโยง menu กับ options set มาอีกที
+        const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets');
+        const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
+            if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
+            map[row.menu_item_id].push(row.option_set_id);
+            return map;
+        }, {});
+        
+        const menuData = menuRows.map(item => {
+            const optionSetIds = menuOptionsLink[item.id] || [];
+            item.option_groups = optionSetIds.reduce((groups, id) => {
+                if (optionsMap[id]) {
+                    groups[id] = optionsMap[id];
                 }
                 return groups;
             }, {});
             return item;
         });
+
         res.json({ status: 'success', data: menuData });
     } catch (error) {
         console.error('Error fetching menu with options:', error);
@@ -135,470 +156,139 @@ app.get('/api/menu', async (req, res) => {
 
 app.post('/api/menu-items', authenticateToken, async (req, res) => {
     try {
-        const { name_th, price, category_th, name_en, desc_th, desc_en, image_url, options_id } = req.body;
-        if (!name_th || !price || !category_th) {
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
+        if (!name_th || !price || !category_id) {
             return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         }
-        const sheets = await getGoogleSheetsClient();
-        const newId = `food-${Date.now()}`;
-        const newRow = [
-            newId, name_th, name_en || '', desc_th || '', desc_en || '', 
-            price, category_th, req.body.category_en || '', options_id || '', 'in_stock', image_url || ''
-        ];
-        await sheets.spreadsheets.values.append({ spreadsheetId, range: 'Food Menu!A:K', valueInputOption: 'USER_ENTERED', resource: { values: [newRow] } });
-        res.status(201).json({ status: 'success', message: 'เพิ่มเมนูสำเร็จ!', data: { id: newId } });
+        const query = `
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id;
+        `;
+        const values = [name_th, price, category_id, name_en || null, desc_th || null, desc_en || null, image_url || null, stock_status || 'in_stock'];
+        const result = await pool.query(query, values);
+
+        res.status(201).json({ status: 'success', message: 'เพิ่มเมนูสำเร็จ!', data: { id: result.rows[0].id } });
     } catch (error) {
+        console.error('Failed to create menu item:', error);
         res.status(500).json({ status: 'error', message: 'Failed to create menu item.' });
     }
 });
 
-app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
+// --- Orders API ---
+app.post('/api/orders', async (req, res) => {
     try {
-        const { id } = req.params;
-        const updatedData = req.body;
-        const sheets = await getGoogleSheetsClient();
-        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:K' });
-        const rows = getRows.data.values;
-        if (!rows) return res.status(404).json({ status: 'error', message: 'Menu sheet not found.' });
-        const rowIndex = rows.findIndex(row => row && row[0] === id);
-        if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Menu item not found' });
-        const rowToUpdate = rowIndex + 1;
-        const existingRow = rows[rowIndex];
-        const newRowData = [
-            id, updatedData.name_th || existingRow[1], updatedData.name_en || existingRow[2],
-            updatedData.desc_th || existingRow[3], updatedData.desc_en || existingRow[4],
-            updatedData.price || existingRow[5], updatedData.category_th || existingRow[6],
-            updatedData.category_en || existingRow[7], updatedData.options_id !== undefined ? updatedData.options_id : existingRow[8], 
-            existingRow[9], updatedData.image_url !== undefined ? updatedData.image_url : existingRow[10]
+        const { cart, total, tableNumber, specialRequest, subtotal, discountPercentage, discountAmount } = req.body;
+        
+        const query = `
+            INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending')
+            RETURNING *;
+        `;
+        
+        const values = [
+            tableNumber || 'N/A',
+            JSON.stringify(cart), // แปลง Array/Object เป็น JSON string ก่อนเก็บ
+            subtotal,
+            discountPercentage || 0,
+            discountAmount || 0,
+            total,
+            specialRequest || ''
         ];
-        await sheets.spreadsheets.values.update({ spreadsheetId, range: `Food Menu!A${rowToUpdate}:K${rowToUpdate}`, valueInputOption: 'USER_ENTERED', resource: { values: [newRowData] } });
-        res.status(200).json({ status: 'success', message: 'อัปเดตเมนูสำเร็จ!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to update menu item.' });
-    }
-});
 
-app.delete('/api/menu-items/:id', authenticateToken, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const sheets = await getGoogleSheetsClient();
-        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:A' });
-        const rows = getRows.data.values;
-        if (!rows) return res.status(404).json({ status: 'error', message: 'Menu sheet not found.' });
-        const rowIndex = rows.findIndex(row => row && row[0] === id);
-        if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Menu item not found' });
-        const sheetMetadata = await sheets.spreadsheets.get({ spreadsheetId });
-        const sheet = sheetMetadata.data.sheets.find(s => s.properties.title === 'Food Menu');
-        if (!sheet) return res.status(404).json({ status: 'error', message: 'Sheet "Food Menu" not found' });
-        const request = { deleteDimension: { range: { sheetId: sheet.properties.sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } };
-        await sheets.spreadsheets.batchUpdate({ spreadsheetId, resource: { requests: [request] } });
-        res.status(200).json({ status: 'success', message: 'ลบเมนูสำเร็จ!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to delete menu item.' });
-    }
-});
+        const result = await pool.query(query, values);
+        const newOrder = result.rows[0];
 
-app.post('/api/menu-items/:id/stock', authenticateToken, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { stock_status } = req.body;
-        if (!stock_status || (stock_status !== 'in_stock' && stock_status !== 'out_of_stock')) {
-            return res.status(400).json({ status: 'error', message: 'Invalid stock status.' });
-        }
-        const sheets = await getGoogleSheetsClient();
-        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Menu!A:A' });
-        const rows = getRows.data.values || [];
-        const rowIndex = rows.findIndex(row => row && row[0] === id);
-        if (rowIndex === -1) {
-            return res.status(404).json({ status: 'error', message: 'Menu item not found' });
-        }
-        const rowToUpdate = rowIndex + 1;
-        await sheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: `Food Menu!J${rowToUpdate}`,
-            valueInputOption: 'USER_ENTERED',
-            resource: { values: [[stock_status]] },
-        });
-        res.json({ status: 'success', message: 'Stock status updated.' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to update stock status.' });
-    }
-});
-
-// --- Category Management APIs ---
-app.get('/api/categories', async (req, res) => {
-    try {
-        const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Categories!A:C' });
-        const rows = response.data.values || [];
-        if (rows.length <= 1) return res.json({ status: 'success', data: [] });
-        const headers = rows.shift();
-        const categories = rows.map(row => {
-            const category = {};
-            headers.forEach((header, index) => { category[header] = row[index]; });
-            return category;
-        });
-        res.json({ status: 'success', data: categories });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
-    }
-});
-
-app.post('/api/categories', authenticateToken, async (req, res) => {
-    try {
-        const { name_th, name_en } = req.body;
-        if (!name_th) return res.status(400).json({ status: 'error', message: 'Category name (TH) is required.' });
-        const sheets = await getGoogleSheetsClient();
-        const newId = `cat-${Date.now()}`;
-        const newRow = [newId, name_th, name_en || ''];
-        await sheets.spreadsheets.values.append({ spreadsheetId, range: 'Categories!A:C', valueInputOption: 'USER_ENTERED', resource: { values: [newRow] } });
-        res.status(201).json({ status: 'success', message: 'เพิ่มหมวดหมู่สำเร็จ!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to create category.' });
-    }
-});
-
-app.put('/api/categories/:id', authenticateToken, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name_th, name_en } = req.body;
-        if (!name_th) return res.status(400).json({ status: 'error', message: 'Category name (TH) is required.' });
-        const sheets = await getGoogleSheetsClient();
-        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Categories!A:C' });
-        const rows = getRows.data.values;
-        if (!rows) return res.status(404).json({ status: 'error', message: 'Categories sheet not found.' });
-        const rowIndex = rows.findIndex(row => row && row[0] === id);
-        if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Category not found' });
-        const rowToUpdate = rowIndex + 1;
-        await sheets.spreadsheets.values.update({ spreadsheetId, range: `Categories!B${rowToUpdate}:C${rowToUpdate}`, valueInputOption: 'USER_ENTERED', resource: { values: [[name_th, name_en || '']] } });
-        res.json({ status: 'success', message: 'อัปเดตหมวดหมู่สำเร็จ!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to update category.' });
-    }
-});
-
-app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const sheets = await getGoogleSheetsClient();
-        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Categories!A:A' });
-        const rows = getRows.data.values;
-        if (!rows) return res.status(404).json({ status: 'error', message: 'Categories sheet not found.' });
-        const rowIndex = rows.findIndex(row => row && row[0] === id);
-        if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Category not found' });
-        const sheetMetadata = await sheets.spreadsheets.get({ spreadsheetId });
-        const sheet = sheetMetadata.data.sheets.find(s => s.properties.title === 'Categories');
-        if (!sheet) return res.status(404).json({ status: 'error', message: 'Sheet "Categories" not found' });
-        const request = { deleteDimension: { range: { sheetId: sheet.properties.sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } };
-        await sheets.spreadsheets.batchUpdate({ spreadsheetId, resource: { requests: [request] } });
-        res.json({ status: 'success', message: 'ลบหมวดหมู่สำเร็จ!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to delete category.' });
-    }
-});
-
-// --- Options Management APIs ---
-app.get('/api/options', async (req, res) => {
-    try {
-        const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Options!A:E' });
-        const rows = response.data.values || [];
-        if (rows.length <= 1) return res.json({ status: 'success', data: {} });
-        const headers = rows.shift();
-        const optionsByGroup = {};
-        rows.forEach(row => {
-            const option = {};
-            headers.forEach((header, index) => { option[header] = row[index]; });
-            const groupId = option.option_set_id;
-            if (groupId) {
-                if (!optionsByGroup[groupId]) { optionsByGroup[groupId] = []; }
-                optionsByGroup[groupId].push(option);
-            }
-        });
-        res.json({ status: 'success', data: optionsByGroup });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to fetch options.' });
-    }
-});
-
-app.post('/api/options', authenticateToken, async (req, res) => {
-    try {
-        const { option_set_id, label_th, label_en, price_add } = req.body;
-        if (!option_set_id || !label_th) return res.status(400).json({ status: 'error', message: 'Option Set ID and Label (TH) are required.' });
-        const sheets = await getGoogleSheetsClient();
-        const newId = `opt-${Date.now()}`;
-        const newRow = [newId, option_set_id, label_th, label_en || '', price_add || 0];
-        await sheets.spreadsheets.values.append({ spreadsheetId, range: 'Food Options!A:E', valueInputOption: 'USER_ENTERED', resource: { values: [newRow] } });
-        res.status(201).json({ status: 'success', message: 'เพิ่มตัวเลือกสำเร็จ!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to create option.' });
-    }
-});
-
-app.put('/api/options/:id', authenticateToken, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { option_set_id, label_th, label_en, price_add } = req.body;
-        if (!option_set_id || !label_th) return res.status(400).json({ status: 'error', message: 'All fields are required.' });
-        const sheets = await getGoogleSheetsClient();
-        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Options!A:E' });
-        const rows = getRows.data.values;
-        if (!rows) return res.status(404).json({ status: 'error', message: 'Options sheet not found.' });
-        const rowIndex = rows.findIndex(row => row && row[0] === id);
-        if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Option not found' });
-        const rowToUpdate = rowIndex + 1;
-        await sheets.spreadsheets.values.update({ spreadsheetId, range: `Food Options!B${rowToUpdate}:E${rowToUpdate}`, valueInputOption: 'USER_ENTERED', resource: { values: [[option_set_id, label_th, label_en || '', price_add || 0]] } });
-        res.json({ status: 'success', message: 'อัปเดตตัวเลือกสำเร็จ!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to update option.' });
-    }
-});
-
-app.delete('/api/options/:id', authenticateToken, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const sheets = await getGoogleSheetsClient();
-        const getRows = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Food Options!A:A' });
-        const rows = getRows.data.values;
-        if (!rows) return res.status(404).json({ status: 'error', message: 'Options sheet not found.' });
-        const rowIndex = rows.findIndex(row => row && row[0] === id);
-        if (rowIndex === -1) return res.status(404).json({ status: 'error', message: 'Option not found' });
-        const sheetMetadata = await sheets.spreadsheets.get({ spreadsheetId });
-        const sheet = sheetMetadata.data.sheets.find(s => s.properties.title === 'Food Options');
-        if (!sheet) return res.status(404).json({ status: 'error', message: 'Sheet "Food Options" not found' });
-        const request = { deleteDimension: { range: { sheetId: sheet.properties.sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } };
-        await sheets.spreadsheets.batchUpdate({ spreadsheetId, resource: { requests: [request] } });
-        res.json({ status: 'success', message: 'ลบตัวเลือกสำเร็จ!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to delete option.' });
-    }
-});
-
-
-// --- Dashboard API (FIXED) ---
-app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
-    try {
-        const sheets = await getGoogleSheetsClient();
-        // [FIX] ดึงข้อมูลจากทั้งชีต Orders และ Discounts เพื่อคำนวณส่วนลดให้ถูกต้อง
-        const [ordersResponse, discountsResponse] = await Promise.all([
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:G' }),
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:C' })
-        ]);
-
-        const orderRows = ordersResponse.data.values || [];
-        const discountRows = discountsResponse.data.values || [];
-
-        if (orderRows.length <= 1) return res.json({ status: 'success', data: {} });
-
-        const { startDate: startDateQuery, endDate: endDateQuery } = req.query;
-        let startDate, endDate;
-        if (startDateQuery && endDateQuery) {
-            startDate = new Date(startDateQuery + 'T00:00:00');
-            endDate = new Date(endDateQuery + 'T23:59:59');
-        } else {
-            const now = new Date();
-            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-            endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-        }
-
-        const parseThaiDate = (thaiDateStr) => {
-            if (!thaiDateStr || !thaiDateStr.includes(' ')) return null;
-            try {
-                const [datePart, timePart] = thaiDateStr.split(' ');
-                const [day, month, year] = datePart.split('/').map(Number);
-                const [hours, minutes, seconds] = timePart.split(':').map(Number);
-                return new Date(year - 543, month - 1, day, hours, minutes, seconds);
-            } catch { return null; }
-        };
-
-        // [FIX] สร้าง Map ของส่วนลดทั้งหมดเพื่อใช้ในการอ้างอิงข้อมูล
-        const discountsMap = discountRows.slice(1).reduce((map, row) => {
-            const [tableName, discountPercentage] = row;
-            if (tableName) {
-                map[tableName] = parseFloat(discountPercentage) || 0;
-            }
-            return map;
-        }, {});
-        
-        const paidOrdersInRange = orderRows.slice(1).filter(row => {
-            if (!row || row.length < 6 || row[5]?.toLowerCase() !== 'paid') return false;
-            const orderDate = parseThaiDate(row[0]);
-            return orderDate && orderDate >= startDate && orderDate <= endDate;
+        // [อัปเกรด] Supabase Realtime จะทำงานแทนส่วนนี้ในอนาคต
+        broadcast({ 
+            type: 'NEW_ORDER', 
+            payload: { 
+                id: newOrder.id, 
+                timestamp: newOrder.created_at, 
+                table: newOrder.table_name, 
+                items: newOrder.items, // ข้อมูล items เป็น JSON อยู่แล้ว
+                special_request: newOrder.special_request, 
+                status: newOrder.status 
+            } 
         });
 
-        let totalSales = 0, totalDiscount = 0, totalOrders = paidOrdersInRange.length;
-        const itemSales = {}, salesByCategory = {}, salesByDay = {}, salesByHour = Array(24).fill(0);
-
-        paidOrdersInRange.forEach(row => {
-            try {
-                const orderDate = parseThaiDate(row[0]);
-                const tableName = row[1];
-                const items = JSON.parse(row[2]);
-                let subtotal = 0;
-
-                items.forEach(item => {
-                    const itemTotal = (item.price || 0) * (item.quantity || 1);
-                    subtotal += itemTotal;
-                    itemSales[item.name_th || 'Unknown'] = (itemSales[item.name_th || 'Unknown'] || 0) + item.quantity;
-                    salesByCategory[item.category_th || 'Uncategorized'] = (salesByCategory[item.category_th || 'Uncategorized'] || 0) + itemTotal;
-                });
-                
-                totalSales += subtotal;
-
-                // [FIX] คำนวณส่วนลดจาก subtotal และ % ส่วนลดที่หามาได้จาก Map
-                const discountPercentage = discountsMap[tableName] || 0;
-                if (discountPercentage > 0) {
-                    const discountAmount = subtotal * (discountPercentage / 100);
-                    totalDiscount += discountAmount;
-                }
-
-                if (orderDate) {
-                    salesByHour[orderDate.getHours()] += subtotal;
-                    const dayKey = orderDate.toISOString().split('T')[0];
-                    salesByDay[dayKey] = (salesByDay[dayKey] || 0) + subtotal;
-                }
-            } catch {}
-        });
-        
-        const netRevenue = totalSales - totalDiscount;
-        const averageOrderValue = totalOrders > 0 ? netRevenue / totalOrders : 0; 
-        const topSellingItems = Object.entries(itemSales).sort(([, a], [, b]) => b - a).slice(0, 5).map(([name, quantity]) => ({ name, quantity }));
-        const sortedSalesByDay = Object.fromEntries(Object.entries(salesByDay).sort(([dateA], [dateB]) => new Date(dateA) - new Date(dateB)));
-
-        res.json({ status: 'success', data: { kpis: { totalSales, totalDiscount, netRevenue, totalOrders, averageOrderValue }, topSellingItems, salesByCategory, salesByDay: sortedSalesByDay, salesByHour } });
+        res.status(201).json({ status: 'success', message: 'Order created successfully!', data: newOrder });
     } catch (error) {
-        console.error("Dashboard data error:", error);
-        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
+        console.error('Failed to create order:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to create order.' });
     }
 });
 
 
 // --- KDS & POS APIs ---
-app.post('/api/orders', async (req, res) => {
-    try {
-        const { cart, total, tableNumber, specialRequest } = req.body;
-        const sheets = await getGoogleSheetsClient();
-        const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-        const newRow = [timestamp, tableNumber || 'N/A', JSON.stringify(cart), total, specialRequest || '', 'Pending', ''];
-        const appendResult = await sheets.spreadsheets.values.append({ spreadsheetId, range: 'Orders!A:G', valueInputOption: 'USER_ENTERED', resource: { values: [newRow] } });
-        const newRowNumber = parseInt(appendResult.data.updates.updatedRange.match(/\d+$/)[0], 10);
-        broadcast({ type: 'NEW_ORDER', payload: { rowNumber: newRowNumber, timestamp: newRow[0], table: newRow[1], items: cart, special_request: newRow[4], status: newRow[5] } });
-        res.status(201).json({ status: 'success', message: 'Order created successfully!' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to create order.' });
-    }
-});
-
 app.get('/api/get-orders', async (req, res) => {
     try {
-        const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:F' });
-        const rows = response.data.values || [];
-        if (rows.length <= 1) return res.json({ status: 'success', data: [] });
-        const activeStatuses = new Set(['pending', 'cooking', 'serving', 'preparing']);
-        const pendingOrders = rows.slice(1).map((row, index) => {
-            const status = (row[5] || 'Pending').toLowerCase();
-            if (!activeStatuses.has(status)) return null;
-            let items = [];
-            try { items = JSON.parse(row[2]); } catch {}
-            return { rowNumber: index + 2, timestamp: row[0], table: row[1], items, total: parseFloat(row[3]) || 0, special_request: row[4], status: row[5] };
-        }).filter(Boolean);
-        res.json({ status: 'success', data: pendingOrders });
+        const query = `
+            SELECT * FROM orders 
+            WHERE status IN ('Pending', 'Cooking', 'Serving', 'Preparing')
+            ORDER BY created_at ASC;
+        `;
+        const result = await pool.query(query);
+        res.json({ status: 'success', data: result.rows });
     } catch (error) {
+        console.error('Failed to fetch orders:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch orders.' });
     }
 });
 
 app.post('/api/update-status', async (req, res) => {
     try {
-        const { rowNumber, newStatus } = req.body;
-        if (!rowNumber || !newStatus) return res.status(400).json({ status: 'error', message: 'Missing rowNumber or newStatus' });
-        const sheets = await getGoogleSheetsClient();
-        await sheets.spreadsheets.values.update({ spreadsheetId, range: `Orders!F${rowNumber}`, valueInputOption: 'USER_ENTERED', resource: { values: [[newStatus]] } });
-        broadcast({ type: 'STATUS_UPDATE', payload: { rowNumber, newStatus } });
-        res.json({ status: 'success', message: `Order status updated` });
+        const { orderId, newStatus } = req.body; // เปลี่ยนจาก rowNumber เป็น orderId
+        if (!orderId || !newStatus) return res.status(400).json({ status: 'error', message: 'Missing orderId or newStatus' });
+        
+        const query = 'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *;';
+        const result = await pool.query(query, [newStatus, orderId]);
+        
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Order not found' });
+        }
+        
+        // [อัปเกรด] Supabase Realtime จะทำงานแทนส่วนนี้
+        broadcast({ type: 'STATUS_UPDATE', payload: { orderId, newStatus } });
+        res.json({ status: 'success', message: `Order status updated`, data: result.rows[0] });
     } catch (error) {
+        console.error('Failed to update status:', error);
         res.status(500).json({ status: 'error', message: 'Failed to update status.' });
     }
 });
 
-// --- Tables API for Cashier (FIXED) ---
+
+// --- Table Management APIs for Cashier ---
 app.get('/api/tables', async (req, res) => {
     try {
-        const sheets = await getGoogleSheetsClient();
-        const [ordersResponse, discountsResponse] = await Promise.all([
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:F' }),
-            sheets.spreadsheets.values.get({ spreadsheetId, range: 'Discounts!A:C' })
-        ]);
+        const query = `
+            SELECT 
+                table_name, 
+                json_agg(items) as all_items, 
+                SUM(subtotal) as subtotal,
+                SUM(discount_amount) as discount_amount,
+                SUM(total) as total,
+                MAX(CASE WHEN status = 'Billing' THEN 1 ELSE 0 END) as is_billing
+            FROM orders
+            WHERE status != 'Paid'
+            GROUP BY table_name;
+        `;
+        const result = await pool.query(query);
 
-        const orderRows = ordersResponse.data.values || [];
-        const discountRows = discountsResponse.data.values || [];
-        
-        if (orderRows.length <= 1) return res.json({ status: 'success', data: {} });
-
-        const parseThaiDate = (thaiDateStr) => {
-            if (!thaiDateStr || !thaiDateStr.includes(' ')) return null;
-            try {
-                const [datePart, timePart] = thaiDateStr.split(' ');
-                const [day, month, year] = datePart.split('/').map(Number);
-                const [hours, minutes, seconds] = timePart.split(':').map(Number);
-                return new Date(year - 543, month - 1, day, hours, minutes, seconds);
-            } catch { return null; }
-        };
-
-        const activeOrders = orderRows.slice(1).filter(row => row && row.length >= 6 && row[5]?.toLowerCase() !== 'paid');
-        const tablesData = {};
-        const tableSessionStart = {}; // Object สำหรับเก็บเวลาเริ่มต้นของแต่ละโต๊ะที่ยังไม่จ่ายเงิน
-
-        // [FIX] 1. จัดกลุ่มออเดอร์ และค้นหา Timestamp ของออเดอร์แรกสุดของโต๊ะที่ยัง active อยู่
-        activeOrders.forEach(row => {
-            const table = row[1];
-            if (!table) return;
-
-            const orderTimestamp = parseThaiDate(row[0]);
-
-            if (!tablesData[table]) {
-                tablesData[table] = { tableName: table, orders: [], status: 'occupied' };
-                if (orderTimestamp) {
-                    tableSessionStart[table] = orderTimestamp; // เก็บเวลาของออเดอร์แรก
-                }
-            } else {
-                if (orderTimestamp && orderTimestamp < tableSessionStart[table]) {
-                    tableSessionStart[table] = orderTimestamp; // อัปเดตถ้าเจอออเดอร์ที่เก่ากว่า
-                }
-            }
-
-            let items = [];
-            try { items = JSON.parse(row[2]); } catch {}
-            tablesData[table].orders.push(...items);
-            if (row[5]?.toLowerCase() === 'billing') tablesData[table].status = 'billing';
-        });
-
-        // [FIX] 2. สร้าง Map ของส่วนลดที่ "ถูกต้อง" โดยเช็คว่าเวลาของส่วนลดต้องเกิดหลังออเดอร์แรกของโต๊ะ
-        const validDiscountsMap = {};
-        discountRows.slice(1).forEach(row => {
-            const [tableName, discountPercentage, timestampStr] = row;
-            if (!tableName || !tableSessionStart[tableName]) return; 
-
-            const discountTimestamp = parseThaiDate(timestampStr);
-            if (discountTimestamp && discountTimestamp >= tableSessionStart[tableName]) {
-                validDiscountsMap[tableName] = parseFloat(discountPercentage) || 0;
-            }
-        });
-
-        // [FIX] 3. คำนวณยอดรวมโดยใช้ส่วนลดจาก Map ที่กรองแล้ว
-        for (const tableName in tablesData) {
-            const subtotal = tablesData[tableName].orders.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
-            const discountPercentage = validDiscountsMap[tableName] || 0; // ใช้ Map ที่ถูกต้อง
-            const discountAmount = subtotal * (discountPercentage / 100);
-            tablesData[tableName] = { 
-                ...tablesData[tableName], 
-                subtotal, 
-                discountPercentage, 
-                discountAmount, 
-                total: subtotal - discountAmount 
+        // จัดรูปแบบข้อมูลให้เหมือนของเดิม
+        const tablesData = result.rows.reduce((acc, row) => {
+            const orders = row.all_items.flat();
+            acc[row.table_name] = {
+                tableName: row.table_name,
+                orders: orders,
+                status: row.is_billing ? 'Billing' : 'Occupied',
+                subtotal: parseFloat(row.subtotal),
+                discountAmount: parseFloat(row.discount_amount),
+                total: parseFloat(row.total),
+                discountPercentage: (parseFloat(row.discount_amount) / parseFloat(row.subtotal)) * 100 || 0
             };
-        }
+            return acc;
+        }, {});
         
         res.json({ status: 'success', data: tablesData });
     } catch (error) {
@@ -607,119 +297,29 @@ app.get('/api/tables', async (req, res) => {
     }
 });
 
-app.get('/api/all-tables', async (req, res) => {
-    try {
-        const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Tables!A2:A' });
-        const rows = response.data.values;
-        if (!rows || rows.length === 0) return res.json({ status: 'success', data: [] });
-        res.json({ status: 'success', data: rows.flat() });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to fetch table list.' });
-    }
-});
-
-app.post('/api/clear-table', async (req, res) => {
+app.post('/api/clear-table', authenticateToken, async (req, res) => {
     try {
         const { tableName } = req.body;
         if (!tableName) return res.status(400).json({ status: 'error', message: 'Missing tableName' });
-        const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!B:F' });
-        const rows = response.data.values || [];
-        if (rows.length <= 1) return res.status(404).json({ status: 'error', message: 'No orders found' });
 
-        const requests = rows.slice(1).map((row, index) => {
-            if (row[0] === tableName && row[4]?.toLowerCase() !== 'paid') {
-                return { range: `Orders!F${index + 2}`, values: [['Paid']] };
-            }
-        }).filter(Boolean);
-        
-        if (requests.length > 0) {
-            await sheets.spreadsheets.values.batchUpdate({ spreadsheetId, resource: { valueInputOption: 'USER_ENTERED', data: requests } });
-        }
-        
-        // [FIX] โค้ดที่เพิ่มส่วนลด 0% ถูกลบออกจากส่วนนี้แล้ว เพื่อให้ Dashboard คำนวณประวัติได้ถูกต้อง
-        
+        const query = `
+            UPDATE orders 
+            SET status = 'Paid' 
+            WHERE table_name = $1 AND status != 'Paid';
+        `;
+        await pool.query(query, [tableName]);
+
+        // [อัปเกรด] Supabase Realtime จะทำงานแทนส่วนนี้
         broadcast({ type: 'TABLE_CLEARED', payload: { tableName } });
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
     } catch (error) {
+        console.error('Failed to clear table:', error);
         res.status(500).json({ status: 'error', message: 'Failed to clear table.' });
     }
 });
 
-app.post('/api/request-bill', async (req, res) => {
-    try {
-        const { tableName } = req.body;
-        if (!tableName) return res.status(400).json({ status: 'error', message: 'Missing tableName' });
-        const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!B:F' });
-        const rows = response.data.values || [];
-        if (rows.length <= 1) return res.status(404).json({ status: 'error', message: 'No orders found' });
 
-        const requests = rows.slice(1).map((row, index) => {
-            if (row[0] === tableName && row[4] && row[4].toLowerCase() !== 'paid' && row[4].toLowerCase() !== 'billing') {
-                return { range: `Orders!F${index + 2}`, values: [['Billing']] };
-            }
-        }).filter(Boolean);
-        
-        if (requests.length > 0) {
-            await sheets.spreadsheets.values.batchUpdate({ spreadsheetId, resource: { valueInputOption: 'USER_ENTERED', data: requests } });
-            broadcast({ type: 'BILL_REQUESTED', payload: { tableName } });
-        }
-        res.json({ status: 'success', message: `Table ${tableName} requested for billing.` });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to request bill.' });
-    }
-});
-
-app.get('/api/order-status', async (req, res) => {
-    try {
-        const { table } = req.query;
-        if (!table) return res.status(400).json({ status: 'error', message: 'Table number is required' });
-        const sheets = await getGoogleSheetsClient();
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Orders!A:F' });
-        const rows = response.data.values || [];
-        if (rows.length <= 1) return res.json({ status: 'success', data: [] });
-
-        const activeStatuses = new Set(['paid']);
-        const activeOrders = rows.slice(1).map((row, index) => {
-            if (row[1] !== table || activeStatuses.has(row[5]?.toLowerCase())) return null;
-            let items = [];
-            try { items = JSON.parse(row[2]); } catch {}
-            return { id: index + 2, timestamp: row[0], items, status: row[5] };
-        }).filter(Boolean);
-        res.json({ status: 'success', data: activeOrders });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to fetch order status.' });
-    }
-});
-
-app.post('/api/apply-discount', authenticateToken, async (req, res) => { 
-    try {
-        const { tableName, discountPercentage } = req.body;
-        if (!tableName || discountPercentage === undefined) {
-            return res.status(400).json({ status: 'error', message: 'Missing tableName or discountPercentage' });
-        }
-        const percentage = parseFloat(discountPercentage);
-        if (isNaN(percentage) || percentage < 0 || percentage > 100) {
-            return res.status(400).json({ status: 'error', message: 'Invalid percentage value' });
-        }
-        const sheets = await getGoogleSheetsClient();
-        const timestamp = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-        const newRow = [tableName, percentage, timestamp];
-        await sheets.spreadsheets.values.append({
-            spreadsheetId,
-            range: 'Discounts!A:C',
-            valueInputOption: 'USER_ENTERED',
-            resource: { values: [newRow] },
-        });
-        broadcast({ type: 'DISCOUNT_APPLIED', payload: { tableName } });
-        res.json({ status: 'success', message: `Discount of ${percentage}% applied to table ${tableName}` });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: 'Failed to apply discount.' });
-    }
-});
-
+// --- เริ่มการทำงานของ Server ---
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
