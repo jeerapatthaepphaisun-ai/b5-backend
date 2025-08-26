@@ -18,7 +18,6 @@ app.use(express.json());
 
 // =================================================================
 // --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
-// --- [แก้ไขล่าสุด] ใช้ DATABASE_URL เพียงตัวเดียวเพื่อความถูกต้อง ---
 // =================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -60,8 +59,6 @@ app.post('/api/login', async (req, res) => {
         const user = result.rows[0];
 
         if (user) {
-            // หมายเหตุ: ในระบบจริงควรใช้ bcrypt.compare เพื่อเทียบรหัสผ่านที่ hash ไว้
-            // const match = await bcrypt.compare(password, user.password_hash);
             const match = (password === user.password_hash); 
             
             if (match) {
@@ -83,7 +80,8 @@ app.post('/api/login', async (req, res) => {
 // --- Category Management APIs ---
 app.get('/api/categories', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM categories ORDER BY name_th');
+        // [แก้ไขล่าสุด] เปลี่ยน ORDER BY เป็น sort_order
+        const result = await pool.query('SELECT * FROM categories ORDER BY sort_order ASC');
         res.json({ status: 'success', data: result.rows });
     } catch (error) {
         console.error('Failed to fetch categories:', error);
@@ -93,10 +91,10 @@ app.get('/api/categories', async (req, res) => {
 
 app.post('/api/categories', authenticateToken, async (req, res) => {
     try {
-        const { name_th, name_en } = req.body;
+        const { name_th, name_en, sort_order } = req.body;
         const result = await pool.query(
-            'INSERT INTO categories (name_th, name_en) VALUES ($1, $2) RETURNING *',
-            [name_th, name_en]
+            'INSERT INTO categories (name_th, name_en, sort_order) VALUES ($1, $2, $3) RETURNING *',
+            [name_th, name_en, sort_order]
         );
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -108,11 +106,12 @@ app.post('/api/categories', authenticateToken, async (req, res) => {
 // --- Menu & Options APIs ---
 app.get('/api/menu', async (req, res) => {
     try {
+        // [แก้ไขล่าสุด] เปลี่ยน ORDER BY เป็น c.sort_order
         const menuQuery = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             FROM menu_items mi
             LEFT JOIN categories c ON mi.category_id = c.id
-            ORDER BY c.name_th, mi.name_th;
+            ORDER BY c.sort_order ASC, mi.name_th ASC;
         `;
         const optionsQuery = 'SELECT * FROM menu_options;';
         const menuOptionsLinkQuery = 'SELECT * FROM menu_item_option_sets;';
@@ -214,9 +213,6 @@ app.post('/api/orders', async (req, res) => {
         const values = [tableNumber || 'N/A', JSON.stringify(cart), subtotal, discountPercentage || 0, discountAmount || 0, total, specialRequest || ''];
         const result = await pool.query(query, values);
         
-        // หมายเหตุ: การแจ้งเตือนจะถูกจัดการโดย Supabase Realtime ที่ฝั่ง Frontend
-        // Frontend จะ subscribe การเปลี่ยนแปลงของตาราง orders
-        
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
         console.error('Failed to create order:', error);
@@ -307,7 +303,6 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
             return res.status(400).json({ status: 'error', message: 'Date query parameter is required.' });
         }
         
-        // ::date casts the timestamp to a date for comparison
         const query = "SELECT * FROM orders WHERE created_at::date = $1 AND status = 'Paid'";
         const result = await pool.query(query, [date]);
         
