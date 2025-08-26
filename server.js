@@ -19,8 +19,12 @@ app.use(express.json());
 // =================================================================
 // --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
 // =================================================================
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+         const pool = new Pool({
+           connectionString: process.env.DATABASE_URL,
+  // เพิ่ม option นี้เข้าไป
+  // เพื่อป้องกัน connection หลุดเมื่อฐานข้อมูล sleep
+           idleTimeoutMillis: 0,
+           connectionTimeoutMillis: 0,
 });
 
 // =================================================================
@@ -361,6 +365,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
 // =================================================================
 // --- Server Start ---
 // =================================================================
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
