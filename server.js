@@ -28,39 +28,76 @@ const pool = new Pool({
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware สำหรับตรวจสอบ Token
-function authenticateToken(req, res, next) {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (token == null) return res.sendStatus(401);
+// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
+function authenticateToken(...allowedRoles) {
+    return function(req, res, next) {
+        const authHeader = req.headers['authorization'];
+        const token = authHeader && authHeader.split(' ')[1];
+        if (token == null) return res.sendStatus(401); // Unauthenticated
 
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403);
-        req.user = user;
-        next();
-    });
+        jwt.verify(token, JWT_SECRET, (err, user) => {
+            if (err) return res.sendStatus(403); // Forbidden (invalid token)
+
+            // Admin สามารถเข้าถึงได้ทุก API ที่มีการป้องกัน
+            if (user.role === 'admin') {
+                req.user = user;
+                return next();
+            }
+
+            // ตรวจสอบว่า role ของผู้ใช้ อยู่ในรายการที่ได้รับอนุญาตหรือไม่
+            if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
+                return res.sendStatus(403); // Forbidden (insufficient permissions)
+            }
+
+            req.user = user;
+            next();
+        });
+    }
 }
 
 // =================================================================
 // --- API Endpoints ---
 // =================================================================
 
+// --- Public Endpoints (ไม่ต้อง Login) ---
 app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running with Supabase!'));
+app.get('/api/menu', async (req, res) => { /* ... โค้ดดึงเมนู ... */ });
+app.get('/api/categories', async (req, res) => { /* ... โค้ดดึงหมวดหมู่ ... */ });
+app.post('/api/orders', async (req, res) => { /* ... โค้ดสร้างออเดอร์ ... */ });
+app.post('/api/login', async (req, res) => { /* ... โค้ดล็อกอิน ... */ });
+
+// --- Admin Endpoints (เฉพาะ Admin) ---
+app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => { /* ... โค้ดเพิ่มเมนู ... */ });
+app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => { /* ... โค้ดแก้ไขเมนู ... */ });
+app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => { /* ... โค้ดอัปเดตสต็อก ... */ });
+app.post('/api/categories', authenticateToken('admin'), async (req, res) => { /* ... โค้ดเพิ่มหมวดหมู่ ... */ });
+app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => { /* ... โค้ดดู Dashboard ... */ });
+
+
+// --- Kitchen Endpoints (สำหรับ Kitchen และ Admin) ---
+app.get('/api/get-orders', authenticateToken('kitchen'), async (req, res) => { /* ... โค้ดดึงออเดอร์สำหรับ KDS ... */ });
+app.post('/api/update-status', authenticateToken('kitchen'), async (req, res) => { /* ... โค้ดอัปเดตสถานะออเดอร์ ... */ });
+
+// --- Cashier Endpoints (สำหรับ Cashier และ Admin) ---
+app.get('/api/tables', authenticateToken('cashier'), async (req, res) => { /* ... โค้ดดูสถานะโต๊ะ ... */ });
+app.post('/api/clear-table', authenticateToken('cashier'), async (req, res) => { /* ... โค้ดเคลียร์โต๊ะ ... */ });
+
+
+// =================================================================
+// --- Logic for Endpoints (โค้ดเต็ม) ---
+// =================================================================
 
 // --- Login API ---
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
-        if (!username || !password) {
-            return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
-        }
+        if (!username || !password) return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
         
         const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
         const user = result.rows[0];
 
         if (user) {
-            const match = (password === user.password_hash); 
-            
+            const match = (password === user.password_hash);
             if (match) {
                 const payload = { username: user.username, role: user.role };
                 const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
@@ -80,7 +117,6 @@ app.post('/api/login', async (req, res) => {
 // --- Category Management APIs ---
 app.get('/api/categories', async (req, res) => {
     try {
-        // [แก้ไขล่าสุด] เปลี่ยน ORDER BY เป็น sort_order
         const result = await pool.query('SELECT * FROM categories ORDER BY sort_order ASC');
         res.json({ status: 'success', data: result.rows });
     } catch (error) {
@@ -89,7 +125,7 @@ app.get('/api/categories', async (req, res) => {
     }
 });
 
-app.post('/api/categories', authenticateToken, async (req, res) => {
+app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
         const { name_th, name_en, sort_order } = req.body;
         const result = await pool.query(
@@ -106,7 +142,6 @@ app.post('/api/categories', authenticateToken, async (req, res) => {
 // --- Menu & Options APIs ---
 app.get('/api/menu', async (req, res) => {
     try {
-        // [แก้ไขล่าสุด] เปลี่ยน ORDER BY เป็น c.sort_order
         const menuQuery = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             FROM menu_items mi
@@ -151,12 +186,11 @@ app.get('/api/menu', async (req, res) => {
     }
 });
 
-app.post('/api/menu-items', authenticateToken, async (req, res) => {
+app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
-        if (!name_th || !price || !category_id) {
-            return res.status(400).json({ status: 'error', message: 'Missing required fields' });
-        }
+        if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
+        
         const query = `
             INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
@@ -170,7 +204,7 @@ app.post('/api/menu-items', authenticateToken, async (req, res) => {
     }
 });
 
-app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
+app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
@@ -188,7 +222,7 @@ app.put('/api/menu-items/:id', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/update-stock', authenticateToken, async (req, res) => {
+app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => {
     try {
         const { itemId, stockStatus } = req.body;
         const result = await pool.query(
@@ -212,7 +246,6 @@ app.post('/api/orders', async (req, res) => {
         `;
         const values = [tableNumber || 'N/A', JSON.stringify(cart), subtotal, discountPercentage || 0, discountAmount || 0, total, specialRequest || ''];
         const result = await pool.query(query, values);
-        
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
         console.error('Failed to create order:', error);
@@ -221,7 +254,7 @@ app.post('/api/orders', async (req, res) => {
 });
 
 // --- KDS & POS APIs ---
-app.get('/api/get-orders', async (req, res) => {
+app.get('/api/get-orders', authenticateToken('kitchen'), async (req, res) => {
     try {
         const query = `
             SELECT * FROM orders 
@@ -236,7 +269,7 @@ app.get('/api/get-orders', async (req, res) => {
     }
 });
 
-app.post('/api/update-status', authenticateToken, async (req, res) => {
+app.post('/api/update-status', authenticateToken('kitchen'), async (req, res) => {
     try {
         const { orderId, newStatus } = req.body;
         const result = await pool.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
@@ -251,7 +284,7 @@ app.post('/api/update-status', authenticateToken, async (req, res) => {
 });
 
 // --- Table Management APIs for Cashier ---
-app.get('/api/tables', async (req, res) => {
+app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
     try {
         const query = `
             SELECT 
@@ -284,7 +317,7 @@ app.get('/api/tables', async (req, res) => {
     }
 });
 
-app.post('/api/clear-table', authenticateToken, async (req, res) => {
+app.post('/api/clear-table', authenticateToken('cashier'), async (req, res) => {
     try {
         const { tableName } = req.body;
         await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
@@ -296,12 +329,10 @@ app.post('/api/clear-table', authenticateToken, async (req, res) => {
 });
 
 // --- Dashboard API ---
-app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     try {
         const { date } = req.query; // format: YYYY-MM-DD
-        if (!date) {
-            return res.status(400).json({ status: 'error', message: 'Date query parameter is required.' });
-        }
+        if (!date) return res.status(400).json({ status: 'error', message: 'Date query parameter is required.' });
         
         const query = "SELECT * FROM orders WHERE created_at::date = $1 AND status = 'Paid'";
         const result = await pool.query(query, [date]);
