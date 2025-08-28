@@ -320,7 +320,7 @@ app.get('/api/get-orders', authenticateToken('kitchen'), async (req, res) => {
     try {
         const query = `
             SELECT * FROM orders 
-            WHERE status IN ('Pending', 'Cooking', 'Serving', 'Preparing')
+            WHERE status IN ('Pending', 'Cooking', 'Preparing')
             ORDER BY created_at ASC;
         `;
         const result = await pool.query(query);
