@@ -1,5 +1,5 @@
 // =================================================================
-// --- Boilerplate & Setup ---
+// --- การตั้งค่าเริ่มต้น (Boilerplate & Setup) ---
 // =================================================================
 require('dotenv').config();
 const express = require('express');
@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // =================================================================
-// --- Database Connection ---
+// --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
 // =================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -30,7 +30,7 @@ const pool = new Pool({
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware for Token and Role Authentication
+// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
@@ -226,6 +226,80 @@ app.get('/api/table-status/:tableName', async (req, res) => {
 
 
 // --- Admin Endpoints ---
+app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        const { startDate = today, endDate = today } = req.query;
+        const ordersQuery = `
+            SELECT * FROM orders 
+            WHERE status = 'Paid' AND created_at::date BETWEEN $1 AND $2
+        `;
+        const ordersResult = await pool.query(ordersQuery, [startDate, endDate]);
+        const paidOrders = ordersResult.rows;
+
+        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+        const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
+        const totalOrders = paidOrders.length;
+        const netRevenue = totalSales - totalDiscount;
+        const averageOrderValue = totalOrders > 0 ? totalSales / totalOrders : 0;
+        
+        const topItemsQuery = `
+            SELECT 
+                item.name_th,
+                SUM((item.quantity)::int) as total_quantity
+            FROM 
+                orders, 
+                jsonb_to_recordset(orders.items) as item(id text, name_th text, quantity int, price numeric)
+            WHERE 
+                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
+            GROUP BY 
+                item.name_th
+            ORDER BY 
+                total_quantity DESC
+            LIMIT 5;
+        `;
+        const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
+
+        const salesByCategoryQuery = `
+            SELECT 
+                c.name_th as category_name,
+                SUM((item.price * item.quantity)) as total_sales
+            FROM 
+                orders,
+                jsonb_to_recordset(orders.items) as item(id text, productId uuid, name_th text, quantity int, price numeric),
+                menu_items mi,
+                categories c
+            WHERE 
+                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
+                AND item.productId = mi.id
+                AND mi.category_id = c.id
+            GROUP BY 
+                c.name_th
+            ORDER BY
+                total_sales DESC;
+        `;
+        const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
+
+        res.json({
+            status: 'success',
+            data: {
+                summary: {
+                    totalSales: totalSales,
+                    netRevenue: netRevenue,
+                    averageOrderValue: averageOrderValue,
+                    totalOrders: totalOrders,
+                    totalDiscount: totalDiscount,
+                },
+                topSellingItems: topItemsResult.rows,
+                salesByCategory: salesByCategoryResult.rows
+            }
+        });
+    } catch (error) {
+        console.error('Failed to fetch dashboard data:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
+    }
+});
+
 app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
         const { name_th, name_en, sort_order } = req.body;
@@ -353,80 +427,6 @@ app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        const { startDate = today, endDate = today } = req.query;
-        const ordersQuery = `
-            SELECT * FROM orders 
-            WHERE status = 'Paid' AND created_at::date BETWEEN $1 AND $2
-        `;
-        const ordersResult = await pool.query(ordersQuery, [startDate, endDate]);
-        const paidOrders = ordersResult.rows;
-
-        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
-        const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
-        const totalOrders = paidOrders.length;
-        const netRevenue = totalSales - totalDiscount;
-        const averageOrderValue = totalOrders > 0 ? totalSales / totalOrders : 0;
-        
-        const topItemsQuery = `
-            SELECT 
-                item.name_th,
-                SUM((item.quantity)::int) as total_quantity
-            FROM 
-                orders, 
-                jsonb_to_recordset(orders.items) as item(id text, name_th text, quantity int, price numeric)
-            WHERE 
-                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
-            GROUP BY 
-                item.name_th
-            ORDER BY 
-                total_quantity DESC
-            LIMIT 5;
-        `;
-        const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
-
-        const salesByCategoryQuery = `
-            SELECT 
-                c.name_th as category_name,
-                SUM((item.price * item.quantity)) as total_sales
-            FROM 
-                orders,
-                jsonb_to_recordset(orders.items) as item(id text, productId uuid, name_th text, quantity int, price numeric),
-                menu_items mi,
-                categories c
-            WHERE 
-                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
-                AND item.productId = mi.id
-                AND mi.category_id = c.id
-            GROUP BY 
-                c.name_th
-            ORDER BY
-                total_sales DESC;
-        `;
-        const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
-
-        res.json({
-            status: 'success',
-            data: {
-                summary: {
-                    totalSales: totalSales,
-                    netRevenue: netRevenue,
-                    averageOrderValue: averageOrderValue,
-                    totalOrders: totalOrders,
-                    totalDiscount: totalDiscount,
-                },
-                topSellingItems: topItemsResult.rows,
-                salesByCategory: salesByCategoryResult.rows
-            }
-        });
-    } catch (error) {
-        console.error('Failed to fetch dashboard data:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
-    }
-});
-
 app.get('/api/users', authenticateToken('admin'), async (req, res) => {
     try {
         const result = await pool.query('SELECT id, username, role FROM users ORDER BY username');
@@ -525,29 +525,48 @@ app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
     try {
         const query = `
             SELECT 
-                table_name, 
-                json_agg(items ORDER BY created_at) as all_items, 
-                SUM(subtotal) as subtotal,
-                SUM(discount_amount) as discount_amount,
-                SUM(total) as total,
-                MAX(CASE WHEN status = 'Billing' THEN 1 ELSE 0 END) as is_billing
-            FROM orders
-            WHERE status != 'Paid'
-            GROUP BY table_name;
+                t.name as table_name,
+                t.status as table_status,
+                o.orders_data
+            FROM 
+                tables t
+            LEFT JOIN (
+                SELECT
+                    table_name,
+                    json_agg(json_build_object(
+                        'items', items,
+                        'subtotal', subtotal,
+                        'discount_amount', discount_amount,
+                        'total', total
+                    ) ORDER BY created_at) as orders_data
+                FROM orders
+                WHERE status != 'Paid'
+                GROUP BY table_name
+            ) o ON t.name = o.table_name
+            ORDER BY t.name;
         `;
         const result = await pool.query(query);
+
         const tablesData = result.rows.reduce((acc, row) => {
-            acc[row.table_name] = {
-                tableName: row.table_name,
-                orders: row.all_items.flat(),
-                status: row.is_billing ? 'Billing' : 'Occupied',
-                subtotal: parseFloat(row.subtotal),
-                discountAmount: parseFloat(row.discount_amount),
-                total: parseFloat(row.total),
-            };
+            if (row.orders_data) {
+                const subtotal = row.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
+                const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
+                const total = row.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
+                
+                acc[row.table_name] = {
+                    tableName: row.table_name,
+                    orders: row.orders_data.flatMap(order => order.items),
+                    status: row.table_status,
+                    subtotal: subtotal,
+                    discountAmount: discountAmount,
+                    total: total,
+                };
+            }
             return acc;
         }, {});
-        res.json({ status: 'success', data: tablesData });
+        
+        res.json({ status: 'success', data: { allTables: result.rows.map(r => r.table_name), occupiedTables: tablesData } });
+
     } catch (error) {
         console.error('Failed to fetch table statuses:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch table statuses.' });
@@ -567,6 +586,39 @@ app.post('/api/clear-table', authenticateToken('cashier'), async (req, res) => {
     }
 });
 
+app.post('/api/apply-discount', authenticateToken('cashier'), async (req, res) => {
+    try {
+        const { tableName, discountPercentage } = req.body;
+        if (!tableName || discountPercentage === undefined) {
+            return res.status(400).json({ status: 'error', message: 'Table name and discount percentage are required.' });
+        }
+    
+        const ordersResult = await pool.query(
+            "SELECT id, subtotal FROM orders WHERE table_name = $1 AND status != 'Paid'", 
+            [tableName]
+        );
+    
+        if (ordersResult.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'No active orders found for this table.' });
+        }
+    
+        for (const order of ordersResult.rows) {
+            const subtotal = parseFloat(order.subtotal);
+            const discountAmount = subtotal * (discountPercentage / 100);
+            const newTotal = subtotal - discountAmount;
+    
+            await pool.query(
+                'UPDATE orders SET discount_percentage = $1, discount_amount = $2, total = $3 WHERE id = $4',
+                [discountPercentage, discountAmount, newTotal, order.id]
+            );
+        }
+    
+        res.json({ status: 'success', message: `Discount of ${discountPercentage}% applied to table ${tableName}.` });
+    } catch (error) {
+        console.error('Error applying discount:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to apply discount.' });
+    }
+});
 
 // =================================================================
 // --- Server Start ---
