@@ -198,7 +198,7 @@ app.get('/api/table-status/:tableName', async (req, res) => {
                 json_agg(items ORDER BY created_at) as all_items, 
                 MAX(status) as status
             FROM orders
-            WHERE table_name = $1 AND status != 'Paid'
+            WHERE table_name = $1 AND status NOT IN ('Paid', 'Serving')
             GROUP BY table_name;
         `;
         const result = await pool.query(query, [tableName]);
