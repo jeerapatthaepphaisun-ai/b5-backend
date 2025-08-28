@@ -8,6 +8,7 @@ const http = require('http');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
+const { formatInTimeZone } = require('date-fns-tz'); // <-- เพิ่มบรรทัดนี้
 
 const app = express();
 const server = http.createServer(app);
@@ -38,7 +39,7 @@ function authenticateToken(...allowedRoles) {
         if (token == null) return res.sendStatus(401);
 
         jwt.verify(token, JWT_SECRET, (err, user) => {
-            if (err) return res.sendStatus(403); 
+            if (err) return res.sendStatus(403);
 
             if (user.role === 'admin') {
                 req.user = user;
@@ -232,8 +233,12 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     try {
         // ใช้ Timezone กรุงเทพฯ
         await pool.query("SET TimeZone = 'Asia/Bangkok';");
-
-        const today = new Date().toISOString().slice(0, 10);
+        
+        // --- ส่วนที่แก้ไข ---
+        // สร้างวันที่โดยอิงตามโซนเวลาของกรุงเทพฯเสมอ
+        const timeZone = 'Asia/Bangkok';
+        const today = formatInTimeZone(new Date(), timeZone, 'yyyy-MM-dd');
+        
         const { startDate = today, endDate = today } = req.query;
 
         // 1. Paid Orders Query
