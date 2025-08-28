@@ -100,7 +100,7 @@ app.get('/api/categories', async (req, res) => {
 
 app.get('/api/all-tables', async (req, res) => {
     try {
-        const result = await pool.query('SELECT name FROM tables ORDER BY name');
+        const result = await pool.query('SELECT name FROM tables ORDER BY sort_order ASC, name ASC');
         const tableNames = result.rows.map(row => row.name);
         res.json({ status: 'success', data: tableNames });
     } catch (error) {
@@ -543,11 +543,12 @@ app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
                 WHERE status != 'Paid'
                 GROUP BY table_name
             ) o ON t.name = o.table_name
-            ORDER BY t.name;
+            ORDER BY t.sort_order ASC, t.name ASC;
         `;
         const result = await pool.query(query);
 
-        const tablesData = result.rows.reduce((acc, row) => {
+        const allTableNames = result.rows.map(r => r.table_name);
+        const occupiedTablesData = result.rows.reduce((acc, row) => {
             if (row.orders_data) {
                 const subtotal = row.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
                 const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
@@ -565,7 +566,7 @@ app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
             return acc;
         }, {});
         
-        res.json({ status: 'success', data: { allTables: result.rows.map(r => r.table_name), occupiedTables: tablesData } });
+        res.json({ status: 'success', data: { allTables: allTableNames, occupiedTables: occupiedTablesData } });
 
     } catch (error) {
         console.error('Failed to fetch table statuses:', error);
@@ -619,6 +620,7 @@ app.post('/api/apply-discount', authenticateToken('cashier'), async (req, res) =
         res.status(500).json({ status: 'error', message: 'Failed to apply discount.' });
     }
 });
+
 
 // =================================================================
 // --- Server Start ---
