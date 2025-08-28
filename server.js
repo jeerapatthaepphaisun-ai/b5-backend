@@ -1,5 +1,5 @@
 // =================================================================
-// --- การตั้งค่าเริ่มต้น (Boilerplate & Setup) ---
+// --- Boilerplate & Setup ---
 // =================================================================
 require('dotenv').config();
 const express = require('express');
@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // =================================================================
-// --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
+// --- Database Connection ---
 // =================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -30,7 +30,7 @@ const pool = new Pool({
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
+// Middleware for Token and Role Authentication
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
@@ -215,56 +215,6 @@ app.get('/api/table-status/:tableName', async (req, res) => {
 
 
 // --- Admin Endpoints ---
-app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
-    try {
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
-        if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
-        
-        const query = `
-            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
-        `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock'];
-        const result = await pool.query(query, values);
-        res.status(201).json({ status: 'success', data: result.rows[0] });
-    } catch (error) {
-        console.error('Failed to create menu item:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to create menu item.' });
-    }
-});
-
-app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
-        const query = `
-            UPDATE menu_items 
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8
-            WHERE id = $9 RETURNING *;
-        `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, id];
-        const result = await pool.query(query, values);
-        res.json({ status: 'success', data: result.rows[0] });
-    } catch (error) {
-        console.error('Failed to update menu item:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to update menu item.' });
-    }
-});
-
-app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => {
-    try {
-        const { itemId, stockStatus } = req.body;
-        const result = await pool.query(
-            'UPDATE menu_items SET stock_status = $1 WHERE id = $2 RETURNING *',
-            [stockStatus, itemId]
-        );
-        res.json({ status: 'success', data: result.rows[0] });
-    } catch (error) {
-        console.error('Failed to update stock status:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to update stock status.' });
-    }
-});
-
 app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
         const { name_th, name_en, sort_order } = req.body;
@@ -313,6 +263,84 @@ app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) =
             return res.status(400).json({ status: 'error', message: 'Cannot delete this category because it is currently in use by a menu item.' });
         }
         res.status(500).json({ status: 'error', message: 'Failed to delete category.' });
+    }
+});
+
+app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
+        if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
+        
+        const query = `
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
+        `;
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock'];
+        const result = await pool.query(query, values);
+        res.status(201).json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Failed to create menu item:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to create menu item.' });
+    }
+});
+
+app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('SELECT * FROM menu_items WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Menu item not found.' });
+        }
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Error fetching menu item:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch menu item.' });
+    }
+});
+
+app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
+        const query = `
+            UPDATE menu_items 
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8
+            WHERE id = $9 RETURNING *;
+        `;
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, id];
+        const result = await pool.query(query, values);
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Failed to update menu item:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to update menu item.' });
+    }
+});
+
+app.delete('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM menu_items WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Menu item not found.' });
+        }
+        res.json({ status: 'success', message: 'Menu item deleted successfully.' });
+    } catch (error) {
+        console.error('Error deleting menu item:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to delete menu item.' });
+    }
+});
+
+app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { itemId, stockStatus } = req.body;
+        const result = await pool.query(
+            'UPDATE menu_items SET stock_status = $1 WHERE id = $2 RETURNING *',
+            [stockStatus, itemId]
+        );
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Failed to update stock status:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to update stock status.' });
     }
 });
 
