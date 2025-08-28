@@ -1,5 +1,5 @@
 // =================================================================
-// --- การตั้งค่าเริ่มต้น (Boilerplate & Setup) ---
+// --- Boilerplate & Setup ---
 // =================================================================
 require('dotenv').config();
 const express = require('express');
@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // =================================================================
-// --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
+// --- Database Connection ---
 // =================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -30,15 +30,15 @@ const pool = new Pool({
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
+// Middleware for Token and Role Authentication
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
         const token = authHeader && authHeader.split(' ')[1];
-        if (token == null) return res.sendStatus(401); // Unauthenticated
+        if (token == null) return res.sendStatus(401);
 
         jwt.verify(token, JWT_SECRET, (err, user) => {
-            if (err) return res.sendStatus(403); // Forbidden (invalid token)
+            if (err) return res.sendStatus(403); 
 
             if (user.role === 'admin') {
                 req.user = user;
@@ -46,7 +46,7 @@ function authenticateToken(...allowedRoles) {
             }
 
             if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
-                return res.sendStatus(403); // Forbidden (insufficient permissions)
+                return res.sendStatus(403);
             }
 
             req.user = user;
@@ -59,7 +59,7 @@ function authenticateToken(...allowedRoles) {
 // --- API Endpoints ---
 // =================================================================
 
-// --- Public Endpoints (ไม่ต้อง Login) ---
+// --- Public Endpoints ---
 app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running with Supabase!'));
 
 app.post('/api/login', async (req, res) => {
@@ -143,6 +143,25 @@ app.get('/api/menu', async (req, res) => {
 app.post('/api/orders', async (req, res) => {
     try {
         const { cart, total, tableNumber, specialRequest, subtotal, discountPercentage, discountAmount } = req.body;
+
+        // Check table status before creating an order
+        if (tableNumber) {
+            const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
+
+            if (tableStatusResult.rowCount === 0) {
+                return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
+            }
+
+            const currentStatus = tableStatusResult.rows[0].status;
+            if (currentStatus === 'Billing') {
+                return res.status(403).json({ status: 'error', message: 'โต๊ะนี้กำลังรอชำระเงิน ไม่สามารถสั่งอาหารเพิ่มได้' });
+            }
+            
+            if (currentStatus === 'Available') {
+                await pool.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', tableNumber]);
+            }
+        }
+
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *;
@@ -156,7 +175,20 @@ app.post('/api/orders', async (req, res) => {
     }
 });
 
-// [เพิ่มเข้ามาล่าสุด] API สำหรับลูกค้าเช็คสถานะโต๊ะ
+app.post('/api/request-bill', async (req, res) => {
+    try {
+        const { tableName } = req.body;
+        if (!tableName) return res.status(400).json({ status: 'error', message: 'ไม่พบชื่อโต๊ะ' });
+        
+        await pool.query('UPDATE tables SET status = $1 WHERE name = $2', ['Billing', tableName]);
+        
+        res.json({ status: 'success', message: 'เรียกเก็บเงินสำเร็จ' });
+    } catch (error) {
+        console.error('Failed to request bill:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to request bill.' });
+    }
+});
+
 app.get('/api/table-status/:tableName', async (req, res) => {
     try {
         const { tableName } = req.params;
@@ -256,7 +288,7 @@ app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
 
 app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     try {
-        const { date } = req.query; // format: YYYY-MM-DD
+        const { date } = req.query; 
         if (!date) return res.status(400).json({ status: 'error', message: 'Date query parameter is required.' });
         
         const query = "SELECT * FROM orders WHERE created_at::date = $1 AND status = 'Paid'";
@@ -351,6 +383,8 @@ app.post('/api/clear-table', authenticateToken('cashier'), async (req, res) => {
     try {
         const { tableName } = req.body;
         await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
+        await pool.query("UPDATE tables SET status = 'Available' WHERE name = $1", [tableName]);
+        
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
     } catch (error) {
         console.error('Failed to clear table:', error);
