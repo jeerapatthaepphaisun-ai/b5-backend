@@ -372,6 +372,71 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     }
 });
 
+// --- User Management Endpoints (Admin Only) ---
+app.get('/api/users', authenticateToken('admin'), async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, username, role FROM users ORDER BY username');
+        res.json({ status: 'success', data: result.rows });
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch users.' });
+    }
+});
+
+app.post('/api/users', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { username, password, role } = req.body;
+        if (!username || !password || !role) {
+            return res.status(400).json({ status: 'error', message: 'Username, password, and role are required.' });
+        }
+        const password_hash = password; 
+        const result = await pool.query(
+            'INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role',
+            [username, password_hash, role]
+        );
+        res.status(201).json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Error creating user:', error);
+        if (error.code === '23505') {
+            return res.status(409).json({ status: 'error', message: 'This username is already taken.' });
+        }
+        res.status(500).json({ status: 'error', message: 'Failed to create user.' });
+    }
+});
+
+app.put('/api/users/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { role, password } = req.body;
+
+        if (password) {
+            const password_hash = password;
+            await pool.query('UPDATE users SET role = $1, password_hash = $2 WHERE id = $3', [role, password_hash, id]);
+        } else {
+            await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
+        }
+        
+        res.json({ status: 'success', message: 'User updated successfully.' });
+    } catch (error) {
+        console.error('Error updating user:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to update user.' });
+    }
+});
+
+app.delete('/api/users/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM users WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'User not found.' });
+        }
+        res.json({ status: 'success', message: 'User deleted successfully.' });
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to delete user.' });
+    }
+});
+
 
 // --- Kitchen Endpoints ---
 app.get('/api/get-orders', authenticateToken('kitchen'), async (req, res) => {
