@@ -144,7 +144,6 @@ app.post('/api/orders', async (req, res) => {
     try {
         const { cart, total, tableNumber, specialRequest, subtotal, discountPercentage, discountAmount } = req.body;
 
-        // Check table status before creating an order
         if (tableNumber) {
             const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
 
@@ -194,26 +193,20 @@ app.get('/api/table-status/:tableName', async (req, res) => {
         const { tableName } = req.params;
         const query = `
             SELECT 
-                table_name, 
-                json_agg(items ORDER BY created_at) as all_items, 
-                MAX(status) as status
+                status, 
+                json_agg(
+                    json_build_object(
+                        'items', items,
+                        'created_at', created_at
+                    ) ORDER BY created_at
+                ) as orders_in_status
             FROM orders
-            WHERE table_name = $1 AND status NOT IN ('Paid', 'Serving')
-            GROUP BY table_name;
+            WHERE table_name = $1 AND status != 'Paid'
+            GROUP BY status;
         `;
         const result = await pool.query(query, [tableName]);
 
-        if (result.rowCount === 0) {
-            return res.json({ status: 'success', data: null });
-        }
-        
-        const tableData = {
-            tableName: result.rows[0].table_name,
-            orders: result.rows[0].all_items.flat(),
-            status: result.rows[0].status,
-        };
-
-        res.json({ status: 'success', data: tableData });
+        res.json({ status: 'success', data: result.rows });
     } catch (error) {
         console.error('Failed to fetch table status:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch table status.' });
