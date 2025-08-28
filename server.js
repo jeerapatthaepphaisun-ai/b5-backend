@@ -1,5 +1,5 @@
 // =================================================================
-// --- Boilerplate & Setup ---
+// --- การตั้งค่าเริ่มต้น (Boilerplate & Setup) ---
 // =================================================================
 require('dotenv').config();
 const express = require('express');
@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // =================================================================
-// --- Database Connection ---
+// --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
 // =================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -30,7 +30,7 @@ const pool = new Pool({
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware for Token and Role Authentication
+// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
@@ -276,6 +276,43 @@ app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     } catch (error) {
         console.error('Failed to create category:', error);
         res.status(500).json({ status: 'error', message: 'Failed to create category.' });
+    }
+});
+
+app.put('/api/categories/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name_th, name_en, sort_order } = req.body;
+        const result = await pool.query(
+            'UPDATE categories SET name_th = $1, name_en = $2, sort_order = $3 WHERE id = $4 RETURNING *',
+            [name_th, name_en, sort_order, id]
+        );
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Category not found.' });
+        }
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Error updating category:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to update category.' });
+    }
+});
+
+app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM categories WHERE id = $1', [id]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Category not found.' });
+        }
+        
+        res.json({ status: 'success', message: 'Category deleted successfully.' });
+    } catch (error) {
+        console.error('Error deleting category:', error);
+        if (error.code === '23503') { 
+            return res.status(400).json({ status: 'error', message: 'Cannot delete this category because it is currently in use by a menu item.' });
+        }
+        res.status(500).json({ status: 'error', message: 'Failed to delete category.' });
     }
 });
 
