@@ -1,5 +1,5 @@
 // =================================================================
-// --- Boilerplate & Setup ---
+// --- การตั้งค่าเริ่มต้น (Boilerplate & Setup) ---
 // =================================================================
 require('dotenv').config();
 const express = require('express');
@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // =================================================================
-// --- Database Connection ---
+// --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
 // =================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -30,7 +30,7 @@ const pool = new Pool({
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware for Token and Role Authentication (Upgraded Version)
+// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
@@ -40,13 +40,11 @@ function authenticateToken(...allowedRoles) {
         jwt.verify(token, JWT_SECRET, (err, user) => {
             if (err) return res.sendStatus(403); // Forbidden (invalid token)
 
-            // Admin can access any protected API
             if (user.role === 'admin') {
                 req.user = user;
                 return next();
             }
 
-            // Check if the user's role is in the list of allowed roles
             if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
                 return res.sendStatus(403); // Forbidden (insufficient permissions)
             }
@@ -61,7 +59,7 @@ function authenticateToken(...allowedRoles) {
 // --- API Endpoints ---
 // =================================================================
 
-// --- Public Endpoints ---
+// --- Public Endpoints (ไม่ต้อง Login) ---
 app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running with Supabase!'));
 
 app.post('/api/login', async (req, res) => {
@@ -102,7 +100,6 @@ app.get('/api/categories', async (req, res) => {
 
 app.get('/api/menu', async (req, res) => {
     try {
-        // Step 1: Fetch main menu items and categories
         const menuQuery = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             FROM menu_items mi
@@ -112,7 +109,6 @@ app.get('/api/menu', async (req, res) => {
         const menuResult = await pool.query(menuQuery);
         let menuData = menuResult.rows;
 
-        // Step 2: Fetch all options
         const optionsResult = await pool.query('SELECT * FROM menu_options;');
         const optionsMap = optionsResult.rows.reduce((map, row) => {
             const { option_set_id, id, label_th, label_en, price_add } = row;
@@ -121,15 +117,13 @@ app.get('/api/menu', async (req, res) => {
             return map;
         }, {});
 
-        // Step 3: Fetch the link data
         const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets;');
         const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
             if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
             map[row.menu_item_id].push(row.option_set_id);
             return map;
         }, {});
-
-        // Step 4: Assemble options into each menu item
+        
         menuData = menuData.map(item => {
             const optionSetIds = menuOptionsLink[item.id] || [];
             item.option_groups = optionSetIds.reduce((groups, id) => {
@@ -140,7 +134,6 @@ app.get('/api/menu', async (req, res) => {
         });
 
         res.json({ status: 'success', data: menuData });
-
     } catch (error) {
         console.error('Error fetching menu with options:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
@@ -160,6 +153,38 @@ app.post('/api/orders', async (req, res) => {
     } catch (error) {
         console.error('Failed to create order:', error);
         res.status(500).json({ status: 'error', message: 'Failed to create order.' });
+    }
+});
+
+// [เพิ่มเข้ามาล่าสุด] API สำหรับลูกค้าเช็คสถานะโต๊ะ
+app.get('/api/table-status/:tableName', async (req, res) => {
+    try {
+        const { tableName } = req.params;
+        const query = `
+            SELECT 
+                table_name, 
+                json_agg(items ORDER BY created_at) as all_items, 
+                MAX(status) as status
+            FROM orders
+            WHERE table_name = $1 AND status != 'Paid'
+            GROUP BY table_name;
+        `;
+        const result = await pool.query(query, [tableName]);
+
+        if (result.rowCount === 0) {
+            return res.json({ status: 'success', data: null });
+        }
+        
+        const tableData = {
+            tableName: result.rows[0].table_name,
+            orders: result.rows[0].all_items.flat(),
+            status: result.rows[0].status,
+        };
+
+        res.json({ status: 'success', data: tableData });
+    } catch (error) {
+        console.error('Failed to fetch table status:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch table status.' });
     }
 });
 
