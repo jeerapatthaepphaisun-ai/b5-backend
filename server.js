@@ -1,5 +1,5 @@
 // =================================================================
-// --- การตั้งค่าเริ่มต้น (Boilerplate & Setup) ---
+// --- Boilerplate & Setup ---
 // =================================================================
 require('dotenv').config();
 const express = require('express');
@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // =================================================================
-// --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
+// --- Database Connection ---
 // =================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -30,7 +30,7 @@ const pool = new Pool({
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
+// Middleware for Token and Role Authentication
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
@@ -95,6 +95,17 @@ app.get('/api/categories', async (req, res) => {
     } catch (error) {
         console.error('Failed to fetch categories:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
+    }
+});
+
+app.get('/api/all-tables', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT name FROM tables ORDER BY name');
+        const tableNames = result.rows.map(row => row.name);
+        res.json({ status: 'success', data: tableNames });
+    } catch (error) {
+        console.error('Error fetching all table names:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch table names.' });
     }
 });
 
@@ -215,82 +226,6 @@ app.get('/api/table-status/:tableName', async (req, res) => {
 
 
 // --- Admin Endpoints ---
-app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        const { startDate = today, endDate = today } = req.query;
-
-        const ordersQuery = `
-            SELECT * FROM orders 
-            WHERE status = 'Paid' AND created_at::date BETWEEN $1 AND $2
-        `;
-        const ordersResult = await pool.query(ordersQuery, [startDate, endDate]);
-        const paidOrders = ordersResult.rows;
-
-        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
-        const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
-        const totalOrders = paidOrders.length;
-        const netRevenue = totalSales - totalDiscount;
-        const averageOrderValue = totalOrders > 0 ? totalSales / totalOrders : 0;
-        
-        const topItemsQuery = `
-            SELECT 
-                item.name_th,
-                SUM((item.quantity)::int) as total_quantity
-            FROM 
-                orders, 
-                jsonb_to_recordset(orders.items) as item(id text, name_th text, quantity int, price numeric)
-            WHERE 
-                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
-            GROUP BY 
-                item.name_th
-            ORDER BY 
-                total_quantity DESC
-            LIMIT 5;
-        `;
-        const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
-
-        const salesByCategoryQuery = `
-            SELECT 
-                c.name_th as category_name,
-                SUM((item.price * item.quantity)) as total_sales
-            FROM 
-                orders,
-                jsonb_to_recordset(orders.items) as item(id text, productId uuid, name_th text, quantity int, price numeric),
-                menu_items mi,
-                categories c
-            WHERE 
-                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
-                AND item.productId = mi.id
-                AND mi.category_id = c.id
-            GROUP BY 
-                c.name_th
-            ORDER BY
-                total_sales DESC;
-        `;
-        const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
-
-        res.json({
-            status: 'success',
-            data: {
-                summary: {
-                    totalSales: totalSales,
-                    netRevenue: netRevenue,
-                    averageOrderValue: averageOrderValue,
-                    totalOrders: totalOrders,
-                    totalDiscount: totalDiscount,
-                },
-                topSellingItems: topItemsResult.rows,
-                salesByCategory: salesByCategoryResult.rows
-            }
-        });
-
-    } catch (error) {
-        console.error('Failed to fetch dashboard data:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
-    }
-});
-
 app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
         const { name_th, name_en, sort_order } = req.body;
@@ -418,6 +353,80 @@ app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => {
     }
 });
 
+app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        const { startDate = today, endDate = today } = req.query;
+        const ordersQuery = `
+            SELECT * FROM orders 
+            WHERE status = 'Paid' AND created_at::date BETWEEN $1 AND $2
+        `;
+        const ordersResult = await pool.query(ordersQuery, [startDate, endDate]);
+        const paidOrders = ordersResult.rows;
+
+        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+        const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
+        const totalOrders = paidOrders.length;
+        const netRevenue = totalSales - totalDiscount;
+        const averageOrderValue = totalOrders > 0 ? totalSales / totalOrders : 0;
+        
+        const topItemsQuery = `
+            SELECT 
+                item.name_th,
+                SUM((item.quantity)::int) as total_quantity
+            FROM 
+                orders, 
+                jsonb_to_recordset(orders.items) as item(id text, name_th text, quantity int, price numeric)
+            WHERE 
+                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
+            GROUP BY 
+                item.name_th
+            ORDER BY 
+                total_quantity DESC
+            LIMIT 5;
+        `;
+        const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
+
+        const salesByCategoryQuery = `
+            SELECT 
+                c.name_th as category_name,
+                SUM((item.price * item.quantity)) as total_sales
+            FROM 
+                orders,
+                jsonb_to_recordset(orders.items) as item(id text, productId uuid, name_th text, quantity int, price numeric),
+                menu_items mi,
+                categories c
+            WHERE 
+                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
+                AND item.productId = mi.id
+                AND mi.category_id = c.id
+            GROUP BY 
+                c.name_th
+            ORDER BY
+                total_sales DESC;
+        `;
+        const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
+
+        res.json({
+            status: 'success',
+            data: {
+                summary: {
+                    totalSales: totalSales,
+                    netRevenue: netRevenue,
+                    averageOrderValue: averageOrderValue,
+                    totalOrders: totalOrders,
+                    totalDiscount: totalDiscount,
+                },
+                topSellingItems: topItemsResult.rows,
+                salesByCategory: salesByCategoryResult.rows
+            }
+        });
+    } catch (error) {
+        console.error('Failed to fetch dashboard data:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
+    }
+});
+
 app.get('/api/users', authenticateToken('admin'), async (req, res) => {
     try {
         const result = await pool.query('SELECT id, username, role FROM users ORDER BY username');
@@ -453,14 +462,12 @@ app.put('/api/users/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const { role, password } = req.body;
-
         if (password) {
             const password_hash = password;
             await pool.query('UPDATE users SET role = $1, password_hash = $2 WHERE id = $3', [role, password_hash, id]);
         } else {
             await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
         }
-        
         res.json({ status: 'success', message: 'User updated successfully.' });
     } catch (error) {
         console.error('Error updating user:', error);
