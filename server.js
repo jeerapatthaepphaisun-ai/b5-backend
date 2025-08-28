@@ -226,72 +226,93 @@ app.get('/api/table-status/:tableName', async (req, res) => {
 
 
 // --- Admin Endpoints ---
+
+// ===== START: UPDATED DASHBOARD ENDPOINT =====
 app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     try {
+        // ใช้ Timezone กรุงเทพฯ
+        await pool.query("SET TimeZone = 'Asia/Bangkok';");
+
         const today = new Date().toISOString().slice(0, 10);
         const { startDate = today, endDate = today } = req.query;
+
+        // 1. Paid Orders Query
         const ordersQuery = `
-            SELECT * FROM orders 
-            WHERE status = 'Paid' AND created_at::date BETWEEN $1 AND $2
+            SELECT *, created_at AT TIME ZONE 'Asia/Bangkok' as local_created_at FROM orders 
+            WHERE status = 'Paid' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
         `;
         const ordersResult = await pool.query(ordersQuery, [startDate, endDate]);
         const paidOrders = ordersResult.rows;
 
-        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+        // 2. KPIs Calculation
+        const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
         const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
         const totalOrders = paidOrders.length;
-        const netRevenue = totalSales - totalDiscount;
-        const averageOrderValue = totalOrders > 0 ? totalSales / totalOrders : 0;
+        const netRevenue = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+        const averageOrderValue = totalOrders > 0 ? netRevenue / totalOrders : 0;
+
+        // 3. Sales by Day
+        const salesByDay = paidOrders.reduce((acc, order) => {
+            const date = new Date(order.local_created_at).toISOString().slice(0, 10);
+            acc[date] = (acc[date] || 0) + parseFloat(order.total);
+            return acc;
+        }, {});
         
+        // 4. Sales by Hour
+        const salesByHour = Array(24).fill(0);
+        paidOrders.forEach(order => {
+            const hour = new Date(order.local_created_at).getHours();
+            salesByHour[hour] += parseFloat(order.total);
+        });
+
+        // 5. Top Selling Items
         const topItemsQuery = `
             SELECT 
-                item.name_th,
-                SUM((item.quantity)::int) as total_quantity
+                item.name_th as name,
+                SUM((item.quantity)::int) as quantity
             FROM 
                 orders, 
                 jsonb_to_recordset(orders.items) as item(id text, name_th text, quantity int, price numeric)
             WHERE 
-                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
-            GROUP BY 
-                item.name_th
-            ORDER BY 
-                total_quantity DESC
-            LIMIT 5;
+                orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
+            GROUP BY item.name_th ORDER BY quantity DESC LIMIT 5;
         `;
         const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
 
+        // 6. Sales by Category
         const salesByCategoryQuery = `
             SELECT 
                 c.name_th as category_name,
-                SUM((item.price * item.quantity)) as total_sales
+                SUM(item.price * item.quantity) as total_sales
             FROM 
                 orders,
                 jsonb_to_recordset(orders.items) as item(id text, productId uuid, name_th text, quantity int, price numeric),
-                menu_items mi,
-                categories c
+                menu_items mi, categories c
             WHERE 
-                orders.status = 'Paid' AND orders.created_at::date BETWEEN $1 AND $2
-                AND item.productId = mi.id
-                AND mi.category_id = c.id
-            GROUP BY 
-                c.name_th
-            ORDER BY
-                total_sales DESC;
+                orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
+                AND item.productId = mi.id AND mi.category_id = c.id
+            GROUP BY c.name_th ORDER BY total_sales DESC;
         `;
         const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
+        const salesByCategory = salesByCategoryResult.rows.reduce((acc, row) => {
+            acc[row.category_name] = parseFloat(row.total_sales);
+            return acc;
+        }, {});
 
         res.json({
             status: 'success',
             data: {
-                summary: {
-                    totalSales: totalSales,
-                    netRevenue: netRevenue,
-                    averageOrderValue: averageOrderValue,
-                    totalOrders: totalOrders,
-                    totalDiscount: totalDiscount,
+                kpis: {
+                    totalSales,
+                    netRevenue,
+                    averageOrderValue,
+                    totalOrders,
+                    totalDiscount,
                 },
+                salesByDay,
+                salesByHour,
                 topSellingItems: topItemsResult.rows,
-                salesByCategory: salesByCategoryResult.rows
+                salesByCategory
             }
         });
     } catch (error) {
@@ -299,6 +320,7 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
+// ===== END: UPDATED DASHBOARD ENDPOINT =====
 
 app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
@@ -537,7 +559,8 @@ app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
                         'items', items,
                         'subtotal', subtotal,
                         'discount_amount', discount_amount,
-                        'total', total
+                        'total', total,
+                        'discount_percentage', discount_percentage
                     ) ORDER BY created_at) as orders_data
                 FROM orders
                 WHERE status != 'Paid'
@@ -553,6 +576,7 @@ app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
                 const subtotal = row.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
                 const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
                 const total = row.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
+                const discountPercentage = row.orders_data[0]?.discount_percentage || 0;
                 
                 acc[row.table_name] = {
                     tableName: row.table_name,
@@ -561,6 +585,7 @@ app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
                     subtotal: subtotal,
                     discountAmount: discountAmount,
                     total: total,
+                    discountPercentage: discountPercentage
                 };
             }
             return acc;
