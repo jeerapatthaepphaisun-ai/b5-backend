@@ -278,11 +278,11 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
                 SUM(item.price * item.quantity) as total_sales
             FROM 
                 orders,
-                jsonb_to_recordset(orders.items) as item(id text, productId uuid, name_th text, quantity int, price numeric),
+                jsonb_to_recordset(orders.items) as item(id uuid, name_th text, quantity int, price numeric),
                 menu_items mi, categories c
             WHERE 
                 orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
-                AND item.productId = mi.id AND mi.category_id = c.id
+                AND item.id = mi.id AND mi.category_id = c.id
             GROUP BY c.name_th ORDER BY total_sales DESC;
         `;
         const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
