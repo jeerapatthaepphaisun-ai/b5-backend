@@ -14,7 +14,6 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
-// --- ✨ ส่วนที่แก้ไขเรื่อง CORS ---
 app.use(cors({
   origin: '*'
 }));
@@ -34,7 +33,6 @@ const pool = new Pool({
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Middleware สำหรับตรวจสอบ Token และ Role (เวอร์ชันสมบูรณ์)
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
@@ -63,7 +61,6 @@ function authenticateToken(...allowedRoles) {
 // --- API Endpoints ---
 // =================================================================
 
-// --- Public Endpoints ---
 app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running with Supabase!'));
 
 app.post('/api/login', async (req, res) => {
@@ -228,13 +225,8 @@ app.get('/api/table-status/:tableName', async (req, res) => {
     }
 });
 
-
-// --- Admin Endpoints ---
-
-// ===== START: UPDATED DASHBOARD ENDPOINT =====
 app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     try {
-        // ใช้ Timezone กรุงเทพฯ
         await pool.query("SET TimeZone = 'Asia/Bangkok';");
         
         const timeZone = 'Asia/Bangkok';
@@ -242,7 +234,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         
         const { startDate = today, endDate = today } = req.query;
 
-        // 1. Paid Orders Query
         const ordersQuery = `
             SELECT *, created_at AT TIME ZONE 'Asia/Bangkok' as local_created_at FROM orders 
             WHERE status = 'Paid' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
@@ -250,28 +241,24 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         const ordersResult = await pool.query(ordersQuery, [startDate, endDate]);
         const paidOrders = ordersResult.rows;
 
-        // 2. KPIs Calculation
         const totalSales = paidOrders.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
         const totalDiscount = paidOrders.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
         const totalOrders = paidOrders.length;
         const netRevenue = paidOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
         const averageOrderValue = totalOrders > 0 ? netRevenue / totalOrders : 0;
 
-        // 3. Sales by Day
         const salesByDay = paidOrders.reduce((acc, order) => {
             const date = new Date(order.local_created_at).toISOString().slice(0, 10);
             acc[date] = (acc[date] || 0) + parseFloat(order.total);
             return acc;
         }, {});
         
-        // 4. Sales by Hour
         const salesByHour = Array(24).fill(0);
         paidOrders.forEach(order => {
             const hour = new Date(order.local_created_at).getHours();
             salesByHour[hour] += parseFloat(order.total);
         });
 
-        // 5. Top Selling Items
         const topItemsQuery = `
             SELECT 
                 item.name_th as name,
@@ -285,33 +272,24 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         `;
         const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
 
-        // 6. Sales by Category
-        // ===== START: โค้ดสำหรับทดสอบ =====
-
         const salesByCategoryQuery = `
-            SELECT
-                item.productId,
-                mi.name_th as menu_item_name,
-                mi.category_id
-            FROM
+            SELECT 
+                c.name_th as category_name,
+                SUM(item.price * item.quantity) as total_sales
+            FROM 
                 orders,
-                jsonb_to_recordset(orders.items) as item(productId uuid),
-                menu_items mi
-            WHERE
-                orders.status = 'Paid'
-                AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
-                AND item.productId = mi.id
-            LIMIT 5;
+                jsonb_to_recordset(orders.items) as item(id text, productId uuid, name_th text, quantity int, price numeric),
+                menu_items mi, categories c
+            WHERE 
+                orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
+                AND item.productId = mi.id AND mi.category_id = c.id
+            GROUP BY c.name_th ORDER BY total_sales DESC;
         `;
-
         const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
-        
-        console.log("--- DEBUG: Sales By Category TEST RESULT ---");
-        console.log(salesByCategoryResult.rows);
-
-        const salesByCategory = {};
-        
-        // ===== END: โค้ดสำหรับทดสอบ =====
+        const salesByCategory = salesByCategoryResult.rows.reduce((acc, row) => {
+            acc[row.category_name] = parseFloat(row.total_sales);
+            return acc;
+        }, {});
 
         res.json({
             status: 'success',
@@ -334,7 +312,8 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
-// ===== END: UPDATED DASHBOARD ENDPOINT =====
+
+// ... (All other endpoints for categories, menu-items, users, kitchen, cashier remain the same) ...
 
 app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
@@ -526,7 +505,6 @@ app.delete('/api/users/:id', authenticateToken('admin'), async (req, res) => {
 });
 
 
-// --- Kitchen Endpoints ---
 app.get('/api/get-orders', authenticateToken('kitchen'), async (req, res) => {
     try {
         const query = `
@@ -556,7 +534,6 @@ app.post('/api/update-status', authenticateToken('kitchen'), async (req, res) =>
     }
 });
 
-// --- Cashier Endpoints ---
 app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
     try {
         const query = `
@@ -659,7 +636,6 @@ app.post('/api/apply-discount', authenticateToken('cashier'), async (req, res) =
         res.status(500).json({ status: 'error', message: 'Failed to apply discount.' });
     }
 });
-
 
 // =================================================================
 // --- Server Start ---
