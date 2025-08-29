@@ -69,7 +69,8 @@ app.post('/api/login', async (req, res) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
         
-        const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+        // --- UPGRADE: Use LOWER() to make username login case-insensitive ---
+        const result = await pool.query('SELECT * FROM users WHERE LOWER(username) = LOWER($1)', [username]);
         const user = result.rows[0];
 
         if (user) {
