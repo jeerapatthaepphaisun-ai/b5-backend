@@ -32,6 +32,7 @@ const pool = new Pool({
 // --- Middleware & Configs ---
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
+const SALT_ROUNDS = 10; // For bcrypt hashing
 
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
@@ -72,7 +73,8 @@ app.post('/api/login', async (req, res) => {
         const user = result.rows[0];
 
         if (user) {
-            const match = (password === user.password_hash);
+            // --- SECURITY FIX: Use bcrypt.compare for secure password validation ---
+            const match = await bcrypt.compare(password, user.password_hash);
             if (match) {
                 const payload = { username: user.username, role: user.role };
                 const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
@@ -259,19 +261,21 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
             salesByHour[hour] += parseFloat(order.total);
         });
 
+        // --- DASHBOARD FIX #2: Corrected topItemsQuery definition ---
         const topItemsQuery = `
             SELECT 
                 item.name_th as name,
                 SUM((item.quantity)::int) as quantity
             FROM 
                 orders, 
-                jsonb_to_recordset(orders.items) as item(id text, name_th text, quantity int, price numeric)
+                jsonb_to_recordset(orders.items) as item(id uuid, name_th text, quantity int, price numeric)
             WHERE 
                 orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
             GROUP BY item.name_th ORDER BY quantity DESC LIMIT 5;
         `;
         const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
 
+        // --- DASHBOARD FIX #1: Corrected salesByCategoryQuery definition and logic ---
         const salesByCategoryQuery = `
             SELECT 
                 c.name_th as category_name,
@@ -312,8 +316,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         res.status(500).json({ status: 'error', message: 'Failed to fetch dashboard data.' });
     }
 });
-
-// ... (All other endpoints for categories, menu-items, users, kitchen, cashier remain the same) ...
 
 app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
@@ -458,7 +460,8 @@ app.post('/api/users', authenticateToken('admin'), async (req, res) => {
         if (!username || !password || !role) {
             return res.status(400).json({ status: 'error', message: 'Username, password, and role are required.' });
         }
-        const password_hash = password; 
+        // --- SECURITY FIX: Hash password before storing ---
+        const password_hash = await bcrypt.hash(password, SALT_ROUNDS); 
         const result = await pool.query(
             'INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role',
             [username, password_hash, role]
@@ -477,8 +480,10 @@ app.put('/api/users/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const { role, password } = req.body;
-        if (password) {
-            const password_hash = password;
+        
+        // --- SECURITY FIX: Hash password if it is being changed ---
+        if (password && password.trim() !== '') {
+            const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
             await pool.query('UPDATE users SET role = $1, password_hash = $2 WHERE id = $3', [role, password_hash, id]);
         } else {
             await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
