@@ -648,6 +648,60 @@ app.post('/api/apply-discount', authenticateToken('cashier'), async (req, res) =
 });
 
 // =================================================================
+// --- API Endpoints for Table Management (Admin Only) ---
+// =================================================================
+
+// GET all tables for the management page
+app.get('/api/tables-management', authenticateToken('admin'), async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, name, sort_order FROM tables ORDER BY sort_order ASC, name ASC');
+        res.json({ status: 'success', data: result.rows });
+    } catch (error) {
+        console.error('Error fetching tables for management:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch tables.' });
+    }
+});
+
+// POST a new table
+app.post('/api/tables', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { name, sort_order } = req.body;
+        if (!name) {
+            return res.status(400).json({ status: 'error', message: 'Table name is required.' });
+        }
+        const result = await pool.query(
+            'INSERT INTO tables (name, sort_order) VALUES ($1, $2) RETURNING *',
+            [name, sort_order || 99]
+        );
+        res.status(201).json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Error creating table:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to create table.' });
+    }
+});
+
+// DELETE a table by ID
+app.delete('/api/tables/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM tables WHERE id = $1', [id]);
+        
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Table not found.' });
+        }
+        
+        res.json({ status: 'success', message: 'Table deleted successfully.' });
+    } catch (error) {
+        // Handle cases where the table is still in use by an order
+        if (error.code === '23503') { 
+            return res.status(400).json({ status: 'error', message: 'Cannot delete this table because it is currently in use by an order.' });
+        }
+        console.error('Error deleting table:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to delete table.' });
+    }
+});
+
+// =================================================================
 // --- Server Start ---
 // =================================================================
 server.listen(PORT, '0.0.0.0', () => {
