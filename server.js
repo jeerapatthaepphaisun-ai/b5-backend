@@ -73,7 +73,6 @@ app.post('/api/login', async (req, res) => {
         const user = result.rows[0];
 
         if (user) {
-            // --- SECURITY FIX: Use bcrypt.compare for secure password validation ---
             const match = await bcrypt.compare(password, user.password_hash);
             if (match) {
                 const payload = { username: user.username, role: user.role };
@@ -261,32 +260,40 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
             salesByHour[hour] += parseFloat(order.total);
         });
 
-        // --- DASHBOARD FIX #2: Corrected topItemsQuery definition ---
         const topItemsQuery = `
             SELECT 
                 item.name_th as name,
                 SUM((item.quantity)::int) as quantity
             FROM 
                 orders, 
-                jsonb_to_recordset(orders.items) as item(id uuid, name_th text, quantity int, price numeric)
+                jsonb_to_recordset(orders.items) as item(id text, name_th text, quantity int, price numeric)
             WHERE 
                 orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
             GROUP BY item.name_th ORDER BY quantity DESC LIMIT 5;
         `;
         const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
 
-        // --- DASHBOARD FIX #1: Corrected salesByCategoryQuery definition and logic ---
         const salesByCategoryQuery = `
+            WITH expanded_items AS (
+                SELECT 
+                    substring(item.id from 1 for 36)::uuid as cleaned_id,
+                    item.price,
+                    item.quantity
+                FROM 
+                    orders,
+                    jsonb_to_recordset(orders.items) as item(id text, price numeric, quantity int)
+                WHERE 
+                    orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
+            )
             SELECT 
                 c.name_th as category_name,
-                SUM(item.price * item.quantity) as total_sales
+                SUM(ei.price * ei.quantity) as total_sales
             FROM 
-                orders,
-                jsonb_to_recordset(orders.items) as item(id uuid, name_th text, quantity int, price numeric),
-                menu_items mi, categories c
-            WHERE 
-                orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
-                AND item.id = mi.id AND mi.category_id = c.id
+                expanded_items ei
+            JOIN 
+                menu_items mi ON ei.cleaned_id = mi.id
+            JOIN 
+                categories c ON mi.category_id = c.id
             GROUP BY c.name_th ORDER BY total_sales DESC;
         `;
         const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
@@ -460,7 +467,6 @@ app.post('/api/users', authenticateToken('admin'), async (req, res) => {
         if (!username || !password || !role) {
             return res.status(400).json({ status: 'error', message: 'Username, password, and role are required.' });
         }
-        // --- SECURITY FIX: Hash password before storing ---
         const password_hash = await bcrypt.hash(password, SALT_ROUNDS); 
         const result = await pool.query(
             'INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role',
@@ -481,7 +487,6 @@ app.put('/api/users/:id', authenticateToken('admin'), async (req, res) => {
         const { id } = req.params;
         const { role, password } = req.body;
         
-        // --- SECURITY FIX: Hash password if it is being changed ---
         if (password && password.trim() !== '') {
             const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
             await pool.query('UPDATE users SET role = $1, password_hash = $2 WHERE id = $3', [role, password_hash, id]);
