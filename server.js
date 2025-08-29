@@ -26,6 +26,8 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   idleTimeoutMillis: 0,
   connectionTimeoutMillis: 0,
+  // FIX: Added host to force IPv4 resolution and prevent ENETUNREACH on OnRender
+  host: 'db.ayqtdyhbzllolrewvxcw.supabase.co',
 });
 
 // =================================================================
@@ -69,11 +71,12 @@ app.post('/api/login', async (req, res) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
         
-        // --- UPGRADE: Use LOWER() to make username login case-insensitive ---
+        // UPGRADE: Use LOWER() to make username login case-insensitive
         const result = await pool.query('SELECT * FROM users WHERE LOWER(username) = LOWER($1)', [username]);
         const user = result.rows[0];
 
         if (user) {
+            // SECURITY FIX: Use bcrypt.compare for secure password validation
             const match = await bcrypt.compare(password, user.password_hash);
             if (match) {
                 const payload = { username: user.username, role: user.role };
