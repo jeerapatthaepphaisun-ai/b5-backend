@@ -8,13 +8,16 @@ const http = require('http');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
-const { formatInTimeZone } = require('date-fns-tz'); // <-- เพิ่มบรรทัดนี้
+const { formatInTimeZone } = require('date-fns-tz');
 
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// --- ✨ ส่วนที่แก้ไขเรื่อง CORS ---
+app.use(cors({
+  origin: '*'
+}));
 app.use(express.json());
 
 // =================================================================
@@ -39,7 +42,7 @@ function authenticateToken(...allowedRoles) {
         if (token == null) return res.sendStatus(401);
 
         jwt.verify(token, JWT_SECRET, (err, user) => {
-            if (err) return res.sendStatus(403);
+            if (err) return res.sendStatus(403); 
 
             if (user.role === 'admin') {
                 req.user = user;
@@ -234,8 +237,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         // ใช้ Timezone กรุงเทพฯ
         await pool.query("SET TimeZone = 'Asia/Bangkok';");
         
-        // --- ส่วนที่แก้ไข ---
-        // สร้างวันที่โดยอิงตามโซนเวลาของกรุงเทพฯเสมอ
         const timeZone = 'Asia/Bangkok';
         const today = formatInTimeZone(new Date(), timeZone, 'yyyy-MM-dd');
         
@@ -285,24 +286,32 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
 
         // 6. Sales by Category
+        // ===== START: โค้ดสำหรับทดสอบ =====
+
         const salesByCategoryQuery = `
-            SELECT 
-                c.name_th as category_name,
-                SUM(item.price * item.quantity) as total_sales
-            FROM 
+            SELECT
+                item.productId,
+                mi.name_th as menu_item_name,
+                mi.category_id
+            FROM
                 orders,
-                jsonb_to_recordset(orders.items) as item(id text, productId uuid, name_th text, quantity int, price numeric),
-                menu_items mi, categories c
-            WHERE 
-                orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
-                AND item.productId = mi.id AND mi.category_id = c.id
-            GROUP BY c.name_th ORDER BY total_sales DESC;
+                jsonb_to_recordset(orders.items) as item(productId uuid),
+                menu_items mi
+            WHERE
+                orders.status = 'Paid'
+                AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
+                AND item.productId = mi.id
+            LIMIT 5;
         `;
+
         const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
-        const salesByCategory = salesByCategoryResult.rows.reduce((acc, row) => {
-            acc[row.category_name] = parseFloat(row.total_sales);
-            return acc;
-        }, {});
+        
+        console.log("--- DEBUG: Sales By Category TEST RESULT ---");
+        console.log(salesByCategoryResult.rows);
+
+        const salesByCategory = {};
+        
+        // ===== END: โค้ดสำหรับทดสอบ =====
 
         res.json({
             status: 'success',
