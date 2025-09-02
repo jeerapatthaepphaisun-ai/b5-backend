@@ -379,14 +379,14 @@ app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) =
 
 app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body; // <-- เพิ่ม discount_percentage ตรงนี้
         if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         
         const query = `
-            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
-        `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock'];
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
+        `; // <-- เพิ่ม discount_percentage และ $9
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0]; // <-- เพิ่ม discount_percentage ตรงนี้
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -412,13 +412,13 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
 app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body; // <-- เพิ่ม discount_percentage ตรงนี้
         const query = `
             UPDATE menu_items 
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8
-            WHERE id = $9 RETURNING *;
-        `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, id];
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9
+            WHERE id = $10 RETURNING *;
+        `; // <-- เพิ่ม discount_percentage = $9 และเปลี่ยน id เป็น $10
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage || 0, id]; // <-- เพิ่ม discount_percentage ตรงนี้
         const result = await pool.query(query, values);
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
