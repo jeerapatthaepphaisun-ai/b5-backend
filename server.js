@@ -26,7 +26,6 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   idleTimeoutMillis: 0,
   connectionTimeoutMillis: 0,
-  // FIX: Added host to force IPv4 resolution and prevent ENETUNREACH on OnRender
   host: 'db.ayqtdyhbzllolrewvxcw.supabase.co',
 });
 
@@ -34,7 +33,7 @@ const pool = new Pool({
 // --- Middleware & Configs ---
 // =================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
-const SALT_ROUNDS = 10; // For bcrypt hashing
+const SALT_ROUNDS = 10;
 
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
@@ -71,12 +70,10 @@ app.post('/api/login', async (req, res) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
         
-        // UPGRADE: Use LOWER() to make username login case-insensitive
         const result = await pool.query('SELECT * FROM users WHERE LOWER(username) = LOWER($1)', [username]);
         const user = result.rows[0];
 
         if (user) {
-            // SECURITY FIX: Use bcrypt.compare for secure password validation
             const match = await bcrypt.compare(password, user.password_hash);
             if (match) {
                 const payload = { username: user.username, role: user.role };
@@ -157,52 +154,15 @@ app.get('/api/menu', async (req, res) => {
     }
 });
 
+// --- FIX ---: This entire endpoint is updated to securely calculate totals on the server.
 app.post('/api/orders', async (req, res) => {
     try {
-        // 1. รับข้อมูลเบื้องต้นจาก client
-        let { cart, tableNumber, specialRequest } = req.body;
+        const { cart, tableNumber, specialRequest } = req.body;
 
-        // ตรวจสอบข้อมูลเบื้องต้น
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
         }
 
-        // 2. คำนวณราคาทั้งหมดใหม่ที่ Backend เพื่อความปลอดภัย
-        let newSubtotal = 0;
-        const processedCart = [];
-
-        // ใช้ for...of loop เพื่อให้รองรับ await ภายใน loop ได้
-        for (const item of cart) {
-            // ดึงข้อมูลล่าสุดของเมนูจาก ID เพื่อให้ได้ราคาและส่วนลดที่ถูกต้อง
-            const itemResult = await pool.query('SELECT price, discount_percentage FROM menu_items WHERE id = $1', [item.id.split('_')[0]]);
-            
-            if (itemResult.rows.length === 0) {
-                return res.status(404).json({ status: 'error', message: `Menu item with id ${item.id} not found.` });
-            }
-
-            const dbItem = itemResult.rows[0];
-            const originalPrice = parseFloat(dbItem.price);
-            const discountPercentage = parseFloat(dbItem.discount_percentage);
-
-            // คำนวณราคาสินค้าต่อชิ้นหลังหักส่วนลด (ถ้ามี)
-            const discountedPrice = originalPrice - (originalPrice * (discountPercentage / 100));
-            const itemTotal = discountedPrice + (item.selected_options_price || 0);
-            
-            // อัปเดตราคาใน item ที่จะบันทึกลงฐานข้อมูล
-            item.price = itemTotal; // อัปเดตราคาเป็นราคาหลังหักส่วนลด + option
-            processedCart.push(item);
-
-            // เพิ่มยอดรวม
-            newSubtotal += itemTotal * item.quantity;
-        }
-
-        // ตอนนี้ยังไม่มีส่วนลดท้ายบิล ให้ total เท่ากับ subtotal ก่อน
-        let newTotal = newSubtotal;
-        let tableDiscountPercentage = 0;
-        let tableDiscountAmount = 0;
-
-
-        // 3. จัดการสถานะโต๊ะ (เหมือนเดิม)
         if (tableNumber) {
             const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
             if (tableStatusResult.rowCount === 0) {
@@ -217,22 +177,61 @@ app.post('/api/orders', async (req, res) => {
             }
         }
 
-        // 4. บันทึกออเดอร์ลงฐานข้อมูลด้วยราคาที่คำนวณใหม่
+        let calculatedSubtotal = 0;
+        const processedCartForDb = [];
+
+        // Loop through cart items to validate and recalculate prices
+        for (const item of cart) {
+            const itemResult = await pool.query('SELECT price, discount_percentage FROM menu_items WHERE id = $1', [item.id]);
+            if (itemResult.rows.length === 0) {
+                return res.status(404).json({ status: 'error', message: `Item with ID ${item.id} not found.` });
+            }
+
+            const dbItem = itemResult.rows[0];
+            const basePrice = parseFloat(dbItem.price);
+            const discountPercentage = parseFloat(dbItem.discount_percentage || 0);
+
+            // Calculate price after item-specific discount
+            const priceAfterDiscount = basePrice - (basePrice * (discountPercentage / 100));
+
+            // Add the price from selected options (sent from the client)
+            const optionsPrice = parseFloat(item.selected_options_price || 0);
+
+            // Final price for a single unit of this item with its options
+            const finalItemPrice = priceAfterDiscount + optionsPrice;
+
+            // Add to the order's subtotal
+            calculatedSubtotal += finalItemPrice * item.quantity;
+            
+            // Push a clean version of the item for DB storage
+            processedCartForDb.push({
+                id: item.uniqueId, // Use the unique ID with options
+                name_th: item.name_th,
+                name_en: item.name_en,
+                quantity: item.quantity,
+                price: finalItemPrice, // Store the final calculated price per item
+                selected_options_text_th: item.selected_options_text_th,
+                selected_options_text_en: item.selected_options_text_en,
+            });
+        }
+        
+        const finalTotal = calculatedSubtotal; // For now, total is same as subtotal. Can add more logic here later (e.g., service charge)
+
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *;
         `;
         const values = [
             tableNumber || 'N/A', 
-            JSON.stringify(processedCart), // ใช้ cart ที่ผ่านการคำนวณราคาใหม่แล้ว
-            newSubtotal, 
-            tableDiscountPercentage, // ส่วนลดท้ายบิล (ตอนนี้เป็น 0)
-            tableDiscountAmount,     // ส่วนลดท้ายบิล (ตอนนี้เป็น 0)
-            newTotal, 
-            specialRequest || '',
-            'Pending'
+            JSON.stringify(processedCartForDb), 
+            calculatedSubtotal, 
+            0, // Overall discount is not applied at this stage
+            0, // Overall discount is not applied at this stage
+            finalTotal, 
+            specialRequest || ''
         ];
         const result = await pool.query(query, values);
+
         res.status(201).json({ status: 'success', data: result.rows[0] });
 
     } catch (error) {
@@ -378,6 +377,8 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     }
 });
 
+// ... (The rest of the admin/CRUD endpoints remain the same)
+
 app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
         const { name_th, name_en, sort_order } = req.body;
@@ -429,14 +430,14 @@ app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) =
 
 app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
         if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         
         const query = `
-            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock'];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -462,13 +463,13 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
 app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
         const query = `
             UPDATE menu_items 
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9
-            WHERE id = $10 RETURNING *;
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8
+            WHERE id = $9 RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage || 0, id];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, id];
         const result = await pool.query(query, values);
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -701,11 +702,6 @@ app.post('/api/apply-discount', authenticateToken('cashier'), async (req, res) =
     }
 });
 
-// =================================================================
-// --- API Endpoints for Table Management (Admin Only) ---
-// =================================================================
-
-// GET all tables for the management page
 app.get('/api/tables-management', authenticateToken('admin'), async (req, res) => {
     try {
         const result = await pool.query('SELECT id, name, sort_order FROM tables ORDER BY sort_order ASC, name ASC');
@@ -716,7 +712,6 @@ app.get('/api/tables-management', authenticateToken('admin'), async (req, res) =
     }
 });
 
-// POST a new table
 app.post('/api/tables', authenticateToken('admin'), async (req, res) => {
     try {
         const { name, sort_order } = req.body;
@@ -734,7 +729,6 @@ app.post('/api/tables', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-// DELETE a table by ID
 app.delete('/api/tables/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
@@ -746,7 +740,6 @@ app.delete('/api/tables/:id', authenticateToken('admin'), async (req, res) => {
         
         res.json({ status: 'success', message: 'Table deleted successfully.' });
     } catch (error) {
-        // Handle cases where the table is still in use by an order
         if (error.code === '23503') { 
             return res.status(400).json({ status: 'error', message: 'Cannot delete this table because it is currently in use by an order.' });
         }
