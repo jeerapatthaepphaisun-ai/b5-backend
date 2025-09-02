@@ -159,32 +159,82 @@ app.get('/api/menu', async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
     try {
-        const { cart, total, tableNumber, specialRequest, subtotal, discountPercentage, discountAmount } = req.body;
+        // 1. รับข้อมูลเบื้องต้นจาก client
+        let { cart, tableNumber, specialRequest } = req.body;
 
+        // ตรวจสอบข้อมูลเบื้องต้น
+        if (!cart || cart.length === 0) {
+            return res.status(400).json({ status: 'error', message: 'Cart is empty' });
+        }
+
+        // 2. คำนวณราคาทั้งหมดใหม่ที่ Backend เพื่อความปลอดภัย
+        let newSubtotal = 0;
+        const processedCart = [];
+
+        // ใช้ for...of loop เพื่อให้รองรับ await ภายใน loop ได้
+        for (const item of cart) {
+            // ดึงข้อมูลล่าสุดของเมนูจาก ID เพื่อให้ได้ราคาและส่วนลดที่ถูกต้อง
+            const itemResult = await pool.query('SELECT price, discount_percentage FROM menu_items WHERE id = $1', [item.id.split('_')[0]]);
+            
+            if (itemResult.rows.length === 0) {
+                return res.status(404).json({ status: 'error', message: `Menu item with id ${item.id} not found.` });
+            }
+
+            const dbItem = itemResult.rows[0];
+            const originalPrice = parseFloat(dbItem.price);
+            const discountPercentage = parseFloat(dbItem.discount_percentage);
+
+            // คำนวณราคาสินค้าต่อชิ้นหลังหักส่วนลด (ถ้ามี)
+            const discountedPrice = originalPrice - (originalPrice * (discountPercentage / 100));
+            const itemTotal = discountedPrice + (item.selected_options_price || 0);
+            
+            // อัปเดตราคาใน item ที่จะบันทึกลงฐานข้อมูล
+            item.price = itemTotal; // อัปเดตราคาเป็นราคาหลังหักส่วนลด + option
+            processedCart.push(item);
+
+            // เพิ่มยอดรวม
+            newSubtotal += itemTotal * item.quantity;
+        }
+
+        // ตอนนี้ยังไม่มีส่วนลดท้ายบิล ให้ total เท่ากับ subtotal ก่อน
+        let newTotal = newSubtotal;
+        let tableDiscountPercentage = 0;
+        let tableDiscountAmount = 0;
+
+
+        // 3. จัดการสถานะโต๊ะ (เหมือนเดิม)
         if (tableNumber) {
             const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
-
             if (tableStatusResult.rowCount === 0) {
                 return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
             }
-
             const currentStatus = tableStatusResult.rows[0].status;
             if (currentStatus === 'Billing') {
                 return res.status(403).json({ status: 'error', message: 'โต๊ะนี้กำลังรอชำระเงิน ไม่สามารถสั่งอาหารเพิ่มได้' });
             }
-            
             if (currentStatus === 'Available') {
                 await pool.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', tableNumber]);
             }
         }
 
+        // 4. บันทึกออเดอร์ลงฐานข้อมูลด้วยราคาที่คำนวณใหม่
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *;
         `;
-        const values = [tableNumber || 'N/A', JSON.stringify(cart), subtotal, discountPercentage || 0, discountAmount || 0, total, specialRequest || ''];
+        const values = [
+            tableNumber || 'N/A', 
+            JSON.stringify(processedCart), // ใช้ cart ที่ผ่านการคำนวณราคาใหม่แล้ว
+            newSubtotal, 
+            tableDiscountPercentage, // ส่วนลดท้ายบิล (ตอนนี้เป็น 0)
+            tableDiscountAmount,     // ส่วนลดท้ายบิล (ตอนนี้เป็น 0)
+            newTotal, 
+            specialRequest || '',
+            'Pending'
+        ];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
+
     } catch (error) {
         console.error('Failed to create order:', error);
         res.status(500).json({ status: 'error', message: 'Failed to create order.' });
@@ -379,14 +429,14 @@ app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) =
 
 app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body; // <-- เพิ่ม discount_percentage ตรงนี้
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
         if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         
         const query = `
             INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
-        `; // <-- เพิ่ม discount_percentage และ $9
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0]; // <-- เพิ่ม discount_percentage ตรงนี้
+        `;
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -412,13 +462,13 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
 app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body; // <-- เพิ่ม discount_percentage ตรงนี้
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
         const query = `
             UPDATE menu_items 
             SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9
             WHERE id = $10 RETURNING *;
-        `; // <-- เพิ่ม discount_percentage = $9 และเปลี่ยน id เป็น $10
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage || 0, id]; // <-- เพิ่ม discount_percentage ตรงนี้
+        `;
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage || 0, id];
         const result = await pool.query(query, values);
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
