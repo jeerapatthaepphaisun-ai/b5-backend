@@ -841,6 +841,8 @@ app.get('/api/categories-by-station', authenticateToken('kitchen', 'bar', 'admin
     }
 });
 
+// ในไฟล์ server.js
+
 app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
     try {
         const timeZone = 'Asia/Bangkok';
@@ -866,6 +868,10 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
             )
             SELECT
                 (SELECT COUNT(*) FROM DailyPaidOrders) as total_orders_count,
+                
+                -- /// เพิ่มส่วนนี้เข้าไปเพื่อคำนวณรายได้สุทธิ ///
+                (SELECT COALESCE(SUM(total), 0) FROM DailyPaidOrders) as net_revenue,
+
                 COUNT(DISTINCT order_id) FILTER (WHERE station_type = 'kitchen') as kitchen_order_count,
                 COALESCE(SUM(item_total_price) FILTER (WHERE station_type = 'kitchen'), 0) as kitchen_total_sales,
                 COUNT(DISTINCT order_id) FILTER (WHERE station_type = 'bar') as bar_order_count,
@@ -877,12 +883,7 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
         const summaryData = summaryResult.rows[0];
 
         const discountedOrdersQuery = `
-            SELECT
-                id,
-                table_name,
-                discount_percentage,
-                discount_amount,
-                total
+            SELECT id, table_name, discount_percentage, discount_amount, total
             FROM orders
             WHERE status = 'Paid' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = $1 AND discount_amount > 0
             ORDER BY created_at DESC;
@@ -894,6 +895,10 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
             data: {
                 summaryDate: queryDate,
                 totalOrders: parseInt(summaryData.total_orders_count, 10),
+                
+                // /// เพิ่ม field นี้ใน object ที่ส่งกลับไป ///
+                netRevenue: parseFloat(summaryData.net_revenue),
+
                 stationSummary: {
                     kitchen: {
                         orderCount: parseInt(summaryData.kitchen_order_count, 10),
