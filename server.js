@@ -154,7 +154,6 @@ app.get('/api/menu', async (req, res) => {
     }
 });
 
-// --- FIX ---: This entire endpoint is updated to securely calculate totals on the server.
 app.post('/api/orders', async (req, res) => {
     try {
         const { cart, tableNumber, specialRequest } = req.body;
@@ -180,7 +179,6 @@ app.post('/api/orders', async (req, res) => {
         let calculatedSubtotal = 0;
         const processedCartForDb = [];
 
-        // Loop through cart items to validate and recalculate prices
         for (const item of cart) {
             const itemResult = await pool.query('SELECT price, discount_percentage FROM menu_items WHERE id = $1', [item.id]);
             if (itemResult.rows.length === 0) {
@@ -190,32 +188,24 @@ app.post('/api/orders', async (req, res) => {
             const dbItem = itemResult.rows[0];
             const basePrice = parseFloat(dbItem.price);
             const discountPercentage = parseFloat(dbItem.discount_percentage || 0);
-
-            // Calculate price after item-specific discount
             const priceAfterDiscount = basePrice - (basePrice * (discountPercentage / 100));
-
-            // Add the price from selected options (sent from the client)
             const optionsPrice = parseFloat(item.selected_options_price || 0);
-
-            // Final price for a single unit of this item with its options
             const finalItemPrice = priceAfterDiscount + optionsPrice;
 
-            // Add to the order's subtotal
             calculatedSubtotal += finalItemPrice * item.quantity;
             
-            // Push a clean version of the item for DB storage
             processedCartForDb.push({
-                id: item.uniqueId, // Use the unique ID with options
+                id: item.uniqueId,
                 name_th: item.name_th,
                 name_en: item.name_en,
                 quantity: item.quantity,
-                price: finalItemPrice, // Store the final calculated price per item
+                price: finalItemPrice,
                 selected_options_text_th: item.selected_options_text_th,
                 selected_options_text_en: item.selected_options_text_en,
             });
         }
         
-        const finalTotal = calculatedSubtotal; // For now, total is same as subtotal. Can add more logic here later (e.g., service charge)
+        const finalTotal = calculatedSubtotal;
 
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
@@ -225,8 +215,8 @@ app.post('/api/orders', async (req, res) => {
             tableNumber || 'N/A', 
             JSON.stringify(processedCartForDb), 
             calculatedSubtotal, 
-            0, // Overall discount is not applied at this stage
-            0, // Overall discount is not applied at this stage
+            0, 
+            0, 
             finalTotal, 
             specialRequest || ''
         ];
@@ -377,8 +367,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-// ... (The rest of the admin/CRUD endpoints remain the same)
-
 app.post('/api/categories', authenticateToken('admin'), async (req, res) => {
     try {
         const { name_th, name_en, sort_order } = req.body;
@@ -428,16 +416,19 @@ app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) =
     }
 });
 
+// --- ✨ EDITED THIS PART (CREATE MENU ITEM) ---
 app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
+        // Added 'discount_percentage' to the destructuring
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
         if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         
         const query = `
-            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock'];
+        // Added 'discount_percentage' to the values array, with a fallback to 0
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -460,16 +451,19 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     }
 });
 
+// --- ✨ EDITED THIS PART (UPDATE MENU ITEM) ---
 app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status } = req.body;
+        // Added 'discount_percentage' to the destructuring
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
         const query = `
             UPDATE menu_items 
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8
-            WHERE id = $9 RETURNING *;
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9
+            WHERE id = $10 RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, id];
+        // Added 'discount_percentage' to the values array
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, id];
         const result = await pool.query(query, values);
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
