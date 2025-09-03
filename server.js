@@ -198,7 +198,7 @@ app.post('/api/orders', async (req, res) => {
                 id: item.uniqueId,
                 name_th: item.name_th,
                 name_en: item.name_en,
-                category_th: item.category_th, // <-- เพิ่มบรรทัดนี้เข้ามา
+                category_th: item.category_th,
                 quantity: item.quantity,
                 price: finalItemPrice,
                 selected_options_text_th: item.selected_options_text_th,
@@ -417,10 +417,8 @@ app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) =
     }
 });
 
-// --- ✨ EDITED THIS PART (CREATE MENU ITEM) ---
 app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
-        // Added 'discount_percentage' to the destructuring
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
         if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         
@@ -428,7 +426,6 @@ app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
             INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
         `;
-        // Added 'discount_percentage' to the values array, with a fallback to 0
         const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
@@ -452,18 +449,15 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-// --- ✨ EDITED THIS PART (UPDATE MENU ITEM) ---
 app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        // Added 'discount_percentage' to the destructuring
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
         const query = `
             UPDATE menu_items 
             SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9
             WHERE id = $10 RETURNING *;
         `;
-        // Added 'discount_percentage' to the values array
         const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, id];
         const result = await pool.query(query, values);
         res.json({ status: 'success', data: result.rows[0] });
@@ -565,22 +559,20 @@ app.delete('/api/users/:id', authenticateToken('admin'), async (req, res) => {
 });
 
 
-app.get('/api/get-orders', authenticateToken('kitchen', 'admin'), async (req, res) => {
+app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (req, res) => {
     try {
-        const { station } = req.query; // รับค่า station จาก URL e.g., 'kitchen' or 'bar'
+        const { station } = req.query; 
         if (!station) {
             return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station (kitchen หรือ bar)' });
         }
 
-        // 1. ดึงชื่อของหมวดหมู่ทั้งหมดที่ตรงกับ station ที่ร้องขอ
         const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
         const targetCategories = categoriesResult.rows.map(row => row.name_th);
 
         if (targetCategories.length === 0) {
-            return res.json({ status: 'success', data: [] }); // ถ้าไม่เจอหมวดหมู่ ก็ส่งค่าว่างกลับไป
+            return res.json({ status: 'success', data: [] }); 
         }
 
-        // 2. ดึงออเดอร์ทั้งหมดที่ยังมีสถานะทำงานอยู่
         const query = `
             SELECT * FROM orders 
             WHERE status IN ('Pending', 'Cooking', 'Preparing')
@@ -589,19 +581,16 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'admin'), async (req, re
         const result = await pool.query(query);
         let orders = result.rows;
 
-        // 3. กรองออเดอร์และรายการอาหารในออเดอร์
         const filteredOrders = orders.map(order => {
-            // คัดกรองเอาเฉพาะรายการอาหาร/เครื่องดื่ม ที่อยู่ในหมวดหมู่เป้าหมาย
             const relevantItems = order.items.filter(item => 
                 targetCategories.includes(item.category_th)
             );
 
-            // ถ้ามีรายการที่เกี่ยวข้องในออเดอร์นี้ ให้ส่งออเดอร์นี้กลับไปพร้อมกับรายการที่กรองแล้ว
             if (relevantItems.length > 0) {
                 return { ...order, items: relevantItems };
             }
             return null;
-        }).filter(Boolean); // เอาค่า null ที่เกิดจากออเดอร์ที่ไม่เกี่ยวข้องออก
+        }).filter(Boolean); 
 
         res.json({ status: 'success', data: filteredOrders });
 
@@ -612,7 +601,7 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'admin'), async (req, re
     }
 });
 
-app.post('/api/update-status', authenticateToken('kitchen'), async (req, res) => {
+app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), async (req, res) => {
     try {
         const { orderId, newStatus } = req.body;
         const result = await pool.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
@@ -772,6 +761,21 @@ app.delete('/api/tables/:id', authenticateToken('admin'), async (req, res) => {
         }
         console.error('Error deleting table:', error);
         res.status(500).json({ status: 'error', message: 'Failed to delete table.' });
+    }
+});
+
+app.get('/api/categories-by-station', authenticateToken('kitchen', 'bar', 'admin'), async (req, res) => {
+    try {
+        const { station } = req.query;
+        if (!station) {
+            return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station' });
+        }
+        const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
+        const targetCategories = categoriesResult.rows.map(row => row.name_th);
+        res.json({ status: 'success', data: targetCategories });
+    } catch (error) {
+        console.error('Failed to fetch categories by station:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch categories.' });
     }
 });
 
