@@ -198,6 +198,7 @@ app.post('/api/orders', async (req, res) => {
                 id: item.uniqueId,
                 name_th: item.name_th,
                 name_en: item.name_en,
+                category_th: item.category_th, // <-- เพิ่มบรรทัดนี้เข้ามา
                 quantity: item.quantity,
                 price: finalItemPrice,
                 selected_options_text_th: item.selected_options_text_th,
@@ -564,16 +565,48 @@ app.delete('/api/users/:id', authenticateToken('admin'), async (req, res) => {
 });
 
 
-app.get('/api/get-orders', authenticateToken('kitchen'), async (req, res) => {
+app.get('/api/get-orders', authenticateToken('kitchen', 'admin'), async (req, res) => {
     try {
+        const { station } = req.query; // รับค่า station จาก URL e.g., 'kitchen' or 'bar'
+        if (!station) {
+            return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station (kitchen หรือ bar)' });
+        }
+
+        // 1. ดึงชื่อของหมวดหมู่ทั้งหมดที่ตรงกับ station ที่ร้องขอ
+        const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
+        const targetCategories = categoriesResult.rows.map(row => row.name_th);
+
+        if (targetCategories.length === 0) {
+            return res.json({ status: 'success', data: [] }); // ถ้าไม่เจอหมวดหมู่ ก็ส่งค่าว่างกลับไป
+        }
+
+        // 2. ดึงออเดอร์ทั้งหมดที่ยังมีสถานะทำงานอยู่
         const query = `
             SELECT * FROM orders 
             WHERE status IN ('Pending', 'Cooking', 'Preparing')
             ORDER BY created_at ASC;
         `;
         const result = await pool.query(query);
-        res.json({ status: 'success', data: result.rows });
-    } catch (error) {
+        let orders = result.rows;
+
+        // 3. กรองออเดอร์และรายการอาหารในออเดอร์
+        const filteredOrders = orders.map(order => {
+            // คัดกรองเอาเฉพาะรายการอาหาร/เครื่องดื่ม ที่อยู่ในหมวดหมู่เป้าหมาย
+            const relevantItems = order.items.filter(item => 
+                targetCategories.includes(item.category_th)
+            );
+
+            // ถ้ามีรายการที่เกี่ยวข้องในออเดอร์นี้ ให้ส่งออเดอร์นี้กลับไปพร้อมกับรายการที่กรองแล้ว
+            if (relevantItems.length > 0) {
+                return { ...order, items: relevantItems };
+            }
+            return null;
+        }).filter(Boolean); // เอาค่า null ที่เกิดจากออเดอร์ที่ไม่เกี่ยวข้องออก
+
+        res.json({ status: 'success', data: filteredOrders });
+
+    } catch (error)
+    {
         console.error('Failed to fetch orders:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch orders.' });
     }
