@@ -602,16 +602,78 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (
 });
 
 app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), async (req, res) => {
+    const client = await pool.connect();
     try {
-        const { orderId, newStatus } = req.body;
-        const result = await pool.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ status: 'error', message: 'Order not found' });
+        await client.query('BEGIN'); // เริ่ม Transaction
+
+        const { orderId, newStatus, station } = req.body;
+
+        // ถ้าสถานะที่ส่งมาไม่ใช่ 'Serving' ให้ทำงานแบบเดิม (เช่น Pending -> Cooking)
+        if (newStatus !== 'Serving') {
+            const result = await client.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
+            await client.query('COMMIT'); // ยืนยัน Transaction
+            if (result.rowCount === 0) {
+                return res.status(404).json({ status: 'error', message: 'Order not found' });
+            }
+            return res.json({ status: 'success', data: result.rows[0] });
         }
-        res.json({ status: 'success', data: result.rows[0] });
+
+        // --- Logic ใหม่สำหรับสถานะ 'Serving' ---
+
+        // 1. เพิ่มสถานีที่ทำงานเสร็จเข้าไปใน Array 'completed_stations'
+        const updateStationResult = await client.query(
+            `UPDATE orders 
+             SET completed_stations = completed_stations || $1::jsonb 
+             WHERE id = $2 AND NOT completed_stations @> $1::jsonb 
+             RETURNING *`,
+            [JSON.stringify(station), orderId]
+        );
+        
+        if (updateStationResult.rowCount === 0) {
+             const currentOrder = await client.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+             if(currentOrder.rowCount === 0) throw new Error('Order not found');
+             // ถ้าหาออเดอร์เจอ แต่ไม่ถูก update แสดงว่า station นี้ถูกเพิ่มไปแล้ว ให้ return ออเดอร์ปัจจุบันไปเลย
+             await client.query('COMMIT');
+             return res.json({ status: 'success', data: currentOrder.rows[0] });
+        }
+
+        const updatedOrder = updateStationResult.rows[0];
+
+        // 2. หาว่าออเดอร์นี้ต้องใช้สถานีอะไรบ้างทั้งหมด
+        const orderItems = updatedOrder.items;
+        const itemCategories = orderItems.map(item => item.category_th);
+        
+        const categoriesResult = await client.query(
+            'SELECT DISTINCT station_type FROM categories WHERE name_th = ANY($1::text[])',
+            [itemCategories]
+        );
+        const requiredStations = categoriesResult.rows.map(row => row.station_type);
+
+        // 3. เปรียบเทียบสถานีที่เสร็จแล้วกับสถานีที่ต้องใช้ทั้งหมด
+        const allStationsCompleted = requiredStations.every(reqStation => 
+            updatedOrder.completed_stations.includes(reqStation)
+        );
+
+        // 4. ถ้าทุกสถานีทำงานเสร็จหมดแล้ว จึงค่อยอัปเดตสถานะหลักเป็น 'Serving'
+        if (allStationsCompleted) {
+            const finalResult = await client.query(
+                'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
+                ['Serving', orderId]
+            );
+            await client.query('COMMIT'); // ยืนยัน Transaction
+            return res.json({ status: 'success', data: finalResult.rows[0] });
+        }
+
+        // ถ้ายังมีสถานีอื่นที่ยังไม่เสร็จ ให้ส่งข้อมูลออเดอร์ที่อัปเดต completed_stations กลับไปก่อน
+        await client.query('COMMIT'); // ยืนยัน Transaction
+        res.json({ status: 'success', data: updatedOrder });
+
     } catch (error) {
+        await client.query('ROLLBACK'); // ยกเลิก Transaction หากเกิดข้อผิดพลาด
         console.error('Failed to update status:', error);
         res.status(500).json({ status: 'error', message: 'Failed to update status.' });
+    } finally {
+        client.release(); // คืน connection กลับสู่ pool
     }
 });
 
