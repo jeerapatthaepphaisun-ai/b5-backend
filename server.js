@@ -841,6 +841,79 @@ app.get('/api/categories-by-station', authenticateToken('kitchen', 'bar', 'admin
     }
 });
 
+app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
+    try {
+        const timeZone = 'Asia/Bangkok';
+        const queryDate = req.query.date || formatInTimeZone(new Date(), timeZone, 'yyyy-MM-dd');
+
+        const summaryQuery = `
+            WITH DailyPaidOrders AS (
+                SELECT *
+                FROM orders
+                WHERE status = 'Paid' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = $1
+            ),
+            ExpandedItems AS (
+                SELECT
+                    dpo.id as order_id,
+                    item.category_th,
+                    (item.price * item.quantity) as item_total_price,
+                    c.station_type
+                FROM
+                    DailyPaidOrders dpo,
+                    jsonb_to_recordset(dpo.items) as item(category_th text, price numeric, quantity int)
+                JOIN
+                    categories c ON item.category_th = c.name_th
+            )
+            SELECT
+                (SELECT COUNT(*) FROM DailyPaidOrders) as total_orders_count,
+                COUNT(DISTINCT order_id) FILTER (WHERE station_type = 'kitchen') as kitchen_order_count,
+                COALESCE(SUM(item_total_price) FILTER (WHERE station_type = 'kitchen'), 0) as kitchen_total_sales,
+                COUNT(DISTINCT order_id) FILTER (WHERE station_type = 'bar') as bar_order_count,
+                COALESCE(SUM(item_total_price) FILTER (WHERE station_type = 'bar'), 0) as bar_total_sales
+            FROM ExpandedItems;
+        `;
+        
+        const summaryResult = await pool.query(summaryQuery, [queryDate]);
+        const summaryData = summaryResult.rows[0];
+
+        const discountedOrdersQuery = `
+            SELECT
+                id,
+                table_name,
+                discount_percentage,
+                discount_amount,
+                total
+            FROM orders
+            WHERE status = 'Paid' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = $1 AND discount_amount > 0
+            ORDER BY created_at DESC;
+        `;
+        const discountedOrdersResult = await pool.query(discountedOrdersQuery, [queryDate]);
+
+        res.json({
+            status: 'success',
+            data: {
+                summaryDate: queryDate,
+                totalOrders: parseInt(summaryData.total_orders_count, 10),
+                stationSummary: {
+                    kitchen: {
+                        orderCount: parseInt(summaryData.kitchen_order_count, 10),
+                        totalSales: parseFloat(summaryData.kitchen_total_sales)
+                    },
+                    bar: {
+                        orderCount: parseInt(summaryData.bar_order_count, 10),
+                        totalSales: parseFloat(summaryData.bar_total_sales)
+                    }
+                },
+                discountedOrders: discountedOrdersResult.rows
+            }
+        });
+
+    } catch (error) {
+        console.error('Failed to fetch KDS dashboard data:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch KDS dashboard data.' });
+    }
+});
+
 // =================================================================
 // --- Server Start ---
 // =================================================================
