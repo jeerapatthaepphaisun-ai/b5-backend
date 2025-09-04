@@ -9,6 +9,8 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
 const { formatInTimeZone } = require('date-fns-tz');
+const multer = require('multer');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,6 +20,11 @@ app.use(cors({
   origin: '*'
 }));
 app.use(express.json());
+
+// Supabase & Multer Setup
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const upload = multer({ storage: multer.memoryStorage() });
+
 
 // =================================================================
 // --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
@@ -114,45 +121,63 @@ app.get('/api/all-tables', async (req, res) => {
 
 app.get('/api/menu', async (req, res) => {
     try {
-        const menuQuery = `
-            SELECT mi.*, c.name_th as category_th, c.name_en as category_en
+        const { category, search, page = 1, limit = 20 } = req.query;
+
+        let baseQuery = `
             FROM menu_items mi
             LEFT JOIN categories c ON mi.category_id = c.id
-            ORDER BY c.sort_order ASC, mi.name_th ASC;
         `;
-        const menuResult = await pool.query(menuQuery);
-        let menuData = menuResult.rows;
+        let whereClauses = [];
+        let queryParams = [];
 
-        const optionsResult = await pool.query('SELECT * FROM menu_options;');
-        const optionsMap = optionsResult.rows.reduce((map, row) => {
-            const { option_set_id, id, label_th, label_en, price_add } = row;
-            if (!map[option_set_id]) map[option_set_id] = [];
-            map[option_set_id].push({ option_id: id, label_th, label_en, price_add: parseFloat(price_add) });
-            return map;
-        }, {});
+        if (category && category !== 'all') {
+            queryParams.push(category);
+            whereClauses.push(`mi.category_id = $${queryParams.length}`);
+        }
 
-        const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets;');
-        const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
-            if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
-            map[row.menu_item_id].push(row.option_set_id);
-            return map;
-        }, {});
+        if (search) {
+            queryParams.push(`%${search}%`);
+            whereClauses.push(`(mi.name_th ILIKE $${queryParams.length} OR mi.name_en ILIKE $${queryParams.length})`);
+        }
+
+        if (whereClauses.length > 0) {
+            baseQuery += ' WHERE ' + whereClauses.join(' AND ');
+        }
+
+        // --- Query for total count ---
+        const totalResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, queryParams);
+        const totalItems = parseInt(totalResult.rows[0].count, 10);
+        const totalPages = Math.ceil(totalItems / limit);
+
+        // --- Query for paginated data ---
+        const offset = (page - 1) * limit;
+        queryParams.push(limit);
+        queryParams.push(offset);
         
-        menuData = menuData.map(item => {
-            const optionSetIds = menuOptionsLink[item.id] || [];
-            item.option_groups = optionSetIds.reduce((groups, id) => {
-                if (optionsMap[id]) groups[id] = optionsMap[id];
-                return groups;
-            }, {});
-            return item;
+        const menuQuery = `
+            SELECT mi.*, c.name_th as category_th, c.name_en as category_en
+            ${baseQuery}
+            ORDER BY c.sort_order ASC, mi.name_th ASC
+            LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length};
+        `;
+        
+        const menuResult = await pool.query(menuQuery, queryParams);
+        
+        res.json({
+            status: 'success',
+            data: {
+                items: menuResult.rows,
+                totalItems,
+                totalPages,
+                currentPage: parseInt(page, 10)
+            }
         });
-
-        res.json({ status: 'success', data: menuData });
     } catch (error) {
-        console.error('Error fetching menu with options:', error);
+        console.error('Error fetching paginated menu:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
     }
 });
+
 
 app.post('/api/orders', async (req, res) => {
     try {
@@ -270,6 +295,50 @@ app.get('/api/table-status/:tableName', async (req, res) => {
     }
 });
 
+// =================================================================
+// --- API Endpoint for Image Upload ---
+// =================================================================
+app.post('/api/upload-image', authenticateToken('admin'), upload.single('menuImage'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ status: 'error', message: 'No file uploaded.' });
+        }
+
+        // สร้างชื่อไฟล์ใหม่ที่ไม่ซ้ำกัน เพื่อป้องกันไฟล์ทับกัน
+        const file = req.file;
+        const fileExt = file.originalname.split('.').pop();
+        const fileName = `menu-${Date.now()}.${fileExt}`;
+
+        // อัปโหลดไฟล์ไปที่ Supabase Storage
+        const { data, error: uploadError } = await supabase.storage
+            .from('menu-images') // ชื่อ bucket ที่เราสร้าง
+            .upload(fileName, file.buffer, {
+                contentType: file.mimetype,
+                cacheControl: '3600',
+                upsert: false,
+            });
+
+        if (uploadError) {
+            throw new Error(uploadError.message);
+        }
+
+        // ดึง Public URL ของไฟล์ที่เพิ่งอัปโหลด
+        const { data: urlData } = supabase.storage
+            .from('menu-images')
+            .getPublicUrl(fileName);
+
+        res.json({
+            status: 'success',
+            message: 'Image uploaded successfully.',
+            data: { imageUrl: urlData.publicUrl }
+        });
+
+    } catch (error) {
+        console.error('Image upload error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to upload image.' });
+    }
+});
+
 app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
     try {
         await pool.query("SET TimeZone = 'Asia/Bangkok';");
@@ -304,7 +373,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
             salesByHour[hour] += parseFloat(order.total);
         });
         
-        // --- START: NEW QUERIES ---
         const baseExpandedItemsCTE = `
             WITH expanded_items AS (
                 SELECT 
@@ -363,7 +431,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
             acc[row.category_name] = parseFloat(row.total_sales);
             return acc;
         }, {});
-        // --- END: NEW QUERIES ---
 
         res.json({
             status: 'success',
@@ -377,7 +444,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
                 },
                 salesByDay,
                 salesByHour,
-                // --- MODIFIED: Changed data structure ---
                 topSellingItems: {
                     kitchen: topKitchenItemsResult.rows,
                     bar: topBarItemsResult.rows
@@ -630,23 +696,19 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (
 app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), async (req, res) => {
     const client = await pool.connect();
     try {
-        await client.query('BEGIN'); // เริ่ม Transaction
+        await client.query('BEGIN'); 
 
         const { orderId, newStatus, station } = req.body;
 
-        // ถ้าสถานะที่ส่งมาไม่ใช่ 'Serving' ให้ทำงานแบบเดิม (เช่น Pending -> Cooking)
         if (newStatus !== 'Serving') {
             const result = await client.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
-            await client.query('COMMIT'); // ยืนยัน Transaction
+            await client.query('COMMIT'); 
             if (result.rowCount === 0) {
                 return res.status(404).json({ status: 'error', message: 'Order not found' });
             }
             return res.json({ status: 'success', data: result.rows[0] });
         }
-
-        // --- Logic ใหม่สำหรับสถานะ 'Serving' ---
-
-        // 1. เพิ่มสถานีที่ทำงานเสร็จเข้าไปใน Array 'completed_stations'
+        
         const updateStationResult = await client.query(
             `UPDATE orders 
              SET completed_stations = completed_stations || $1::jsonb 
@@ -658,14 +720,11 @@ app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), asy
         if (updateStationResult.rowCount === 0) {
              const currentOrder = await client.query('SELECT * FROM orders WHERE id = $1', [orderId]);
              if(currentOrder.rowCount === 0) throw new Error('Order not found');
-             // ถ้าหาออเดอร์เจอ แต่ไม่ถูก update แสดงว่า station นี้ถูกเพิ่มไปแล้ว ให้ return ออเดอร์ปัจจุบันไปเลย
              await client.query('COMMIT');
              return res.json({ status: 'success', data: currentOrder.rows[0] });
         }
 
         const updatedOrder = updateStationResult.rows[0];
-
-        // 2. หาว่าออเดอร์นี้ต้องใช้สถานีอะไรบ้างทั้งหมด
         const orderItems = updatedOrder.items;
         const itemCategories = orderItems.map(item => item.category_th);
         
@@ -675,31 +734,28 @@ app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), asy
         );
         const requiredStations = categoriesResult.rows.map(row => row.station_type);
 
-        // 3. เปรียบเทียบสถานีที่เสร็จแล้วกับสถานีที่ต้องใช้ทั้งหมด
         const allStationsCompleted = requiredStations.every(reqStation => 
             updatedOrder.completed_stations.includes(reqStation)
         );
 
-        // 4. ถ้าทุกสถานีทำงานเสร็จหมดแล้ว จึงค่อยอัปเดตสถานะหลักเป็น 'Serving'
         if (allStationsCompleted) {
             const finalResult = await client.query(
                 'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
                 ['Serving', orderId]
             );
-            await client.query('COMMIT'); // ยืนยัน Transaction
+            await client.query('COMMIT'); 
             return res.json({ status: 'success', data: finalResult.rows[0] });
         }
 
-        // ถ้ายังมีสถานีอื่นที่ยังไม่เสร็จ ให้ส่งข้อมูลออเดอร์ที่อัปเดต completed_stations กลับไปก่อน
-        await client.query('COMMIT'); // ยืนยัน Transaction
+        await client.query('COMMIT'); 
         res.json({ status: 'success', data: updatedOrder });
 
     } catch (error) {
-        await client.query('ROLLBACK'); // ยกเลิก Transaction หากเกิดข้อผิดพลาด
+        await client.query('ROLLBACK'); 
         console.error('Failed to update status:', error);
         res.status(500).json({ status: 'error', message: 'Failed to update status.' });
     } finally {
-        client.release(); // คืน connection กลับสู่ pool
+        client.release(); 
     }
 });
 
@@ -867,8 +923,6 @@ app.get('/api/categories-by-station', authenticateToken('kitchen', 'bar', 'admin
     }
 });
 
-// ในไฟล์ server.js
-
 app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
     try {
         const timeZone = 'Asia/Bangkok';
@@ -894,10 +948,7 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
             )
             SELECT
                 (SELECT COUNT(*) FROM DailyPaidOrders) as total_orders_count,
-                
-                -- /// เพิ่มส่วนนี้เข้าไปเพื่อคำนวณรายได้สุทธิ ///
                 (SELECT COALESCE(SUM(total), 0) FROM DailyPaidOrders) as net_revenue,
-
                 COUNT(DISTINCT order_id) FILTER (WHERE station_type = 'kitchen') as kitchen_order_count,
                 COALESCE(SUM(item_total_price) FILTER (WHERE station_type = 'kitchen'), 0) as kitchen_total_sales,
                 COUNT(DISTINCT order_id) FILTER (WHERE station_type = 'bar') as bar_order_count,
@@ -921,10 +972,7 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
             data: {
                 summaryDate: queryDate,
                 totalOrders: parseInt(summaryData.total_orders_count, 10),
-                
-                // /// เพิ่ม field นี้ใน object ที่ส่งกลับไป ///
                 netRevenue: parseFloat(summaryData.net_revenue),
-
                 stationSummary: {
                     kitchen: {
                         orderCount: parseInt(summaryData.kitchen_order_count, 10),
