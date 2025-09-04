@@ -303,21 +303,9 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
             const hour = new Date(order.local_created_at).getHours();
             salesByHour[hour] += parseFloat(order.total);
         });
-
-        const topItemsQuery = `
-            SELECT 
-                item.name_th as name,
-                SUM((item.quantity)::int) as quantity
-            FROM 
-                orders, 
-                jsonb_to_recordset(orders.items) as item(id text, name_th text, quantity int, price numeric)
-            WHERE 
-                orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
-            GROUP BY item.name_th ORDER BY quantity DESC LIMIT 5;
-        `;
-        const topItemsResult = await pool.query(topItemsQuery, [startDate, endDate]);
-
-        const salesByCategoryQuery = `
+        
+        // --- START: NEW QUERIES ---
+        const baseExpandedItemsCTE = `
             WITH expanded_items AS (
                 SELECT 
                     substring(item.id from 1 for 36)::uuid as cleaned_id,
@@ -329,22 +317,53 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
                 WHERE 
                     orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
             )
+        `;
+
+        const topItemsQuery = (station) => `
+            ${baseExpandedItemsCTE}
+            SELECT 
+                mi.name_th as name,
+                SUM(ei.quantity) as quantity
+            FROM expanded_items ei
+            JOIN menu_items mi ON ei.cleaned_id = mi.id
+            JOIN categories c ON mi.category_id = c.id
+            WHERE c.station_type = $3
+            GROUP BY mi.name_th ORDER BY quantity DESC LIMIT 5;
+        `;
+
+        const salesByCategoryQuery = (station) => `
+            ${baseExpandedItemsCTE}
             SELECT 
                 c.name_th as category_name,
                 SUM(ei.price * ei.quantity) as total_sales
-            FROM 
-                expanded_items ei
-            JOIN 
-                menu_items mi ON ei.cleaned_id = mi.id
-            JOIN 
-                categories c ON mi.category_id = c.id
+            FROM expanded_items ei
+            JOIN menu_items mi ON ei.cleaned_id = mi.id
+            JOIN categories c ON mi.category_id = c.id
+            WHERE c.station_type = $3
             GROUP BY c.name_th ORDER BY total_sales DESC;
         `;
-        const salesByCategoryResult = await pool.query(salesByCategoryQuery, [startDate, endDate]);
-        const salesByCategory = salesByCategoryResult.rows.reduce((acc, row) => {
+
+        const [
+            topKitchenItemsResult,
+            topBarItemsResult,
+            salesByKitchenCategoryResult,
+            salesByBarCategoryResult
+        ] = await Promise.all([
+            pool.query(topItemsQuery('kitchen'), [startDate, endDate, 'kitchen']),
+            pool.query(topItemsQuery('bar'), [startDate, endDate, 'bar']),
+            pool.query(salesByCategoryQuery('kitchen'), [startDate, endDate, 'kitchen']),
+            pool.query(salesByCategoryQuery('bar'), [startDate, endDate, 'bar'])
+        ]);
+        
+        const salesByKitchenCategory = salesByKitchenCategoryResult.rows.reduce((acc, row) => {
             acc[row.category_name] = parseFloat(row.total_sales);
             return acc;
         }, {});
+        const salesByBarCategory = salesByBarCategoryResult.rows.reduce((acc, row) => {
+            acc[row.category_name] = parseFloat(row.total_sales);
+            return acc;
+        }, {});
+        // --- END: NEW QUERIES ---
 
         res.json({
             status: 'success',
@@ -358,8 +377,15 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
                 },
                 salesByDay,
                 salesByHour,
-                topSellingItems: topItemsResult.rows,
-                salesByCategory
+                // --- MODIFIED: Changed data structure ---
+                topSellingItems: {
+                    kitchen: topKitchenItemsResult.rows,
+                    bar: topBarItemsResult.rows
+                },
+                salesByCategory: {
+                    kitchen: salesByKitchenCategory,
+                    bar: salesByBarCategory
+                }
             }
         });
     } catch (error) {
