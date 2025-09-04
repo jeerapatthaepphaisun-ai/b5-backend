@@ -22,7 +22,7 @@ app.use(cors({
 app.use(express.json());
 
 // Supabase & Multer Setup
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const upload = multer({ storage: multer.memoryStorage() });
 
 
@@ -144,12 +144,10 @@ app.get('/api/menu', async (req, res) => {
             baseQuery += ' WHERE ' + whereClauses.join(' AND ');
         }
 
-        // --- Query for total count ---
         const totalResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, queryParams);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
         const totalPages = Math.ceil(totalItems / limit);
 
-        // --- Query for paginated data ---
         const offset = (page - 1) * limit;
         queryParams.push(limit);
         queryParams.push(offset);
@@ -162,11 +160,38 @@ app.get('/api/menu', async (req, res) => {
         `;
         
         const menuResult = await pool.query(menuQuery, queryParams);
+        let menuItems = menuResult.rows;
+
+        if (menuItems.length > 0) {
+            const optionsResult = await pool.query('SELECT * FROM menu_options;');
+            const optionsMap = optionsResult.rows.reduce((map, row) => {
+                const { option_set_id, id, label_th, label_en, price_add } = row;
+                if (!map[option_set_id]) map[option_set_id] = [];
+                map[option_set_id].push({ option_id: id, label_th, label_en, price_add: parseFloat(price_add) });
+                return map;
+            }, {});
+
+            const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets;');
+            const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
+                if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
+                map[row.menu_item_id].push(row.option_set_id);
+                return map;
+            }, {});
+            
+            menuItems = menuItems.map(item => {
+                const optionSetIds = menuOptionsLink[item.id] || [];
+                item.option_groups = optionSetIds.reduce((groups, id) => {
+                    if (optionsMap[id]) groups[id] = optionsMap[id];
+                    return groups;
+                }, {});
+                return item;
+            });
+        }
         
         res.json({
             status: 'success',
             data: {
-                items: menuResult.rows,
+                items: menuItems,
                 totalItems,
                 totalPages,
                 currentPage: parseInt(page, 10)
@@ -304,14 +329,12 @@ app.post('/api/upload-image', authenticateToken('admin'), upload.single('menuIma
             return res.status(400).json({ status: 'error', message: 'No file uploaded.' });
         }
 
-        // สร้างชื่อไฟล์ใหม่ที่ไม่ซ้ำกัน เพื่อป้องกันไฟล์ทับกัน
         const file = req.file;
         const fileExt = file.originalname.split('.').pop();
         const fileName = `menu-${Date.now()}.${fileExt}`;
 
-        // อัปโหลดไฟล์ไปที่ Supabase Storage
         const { data, error: uploadError } = await supabase.storage
-            .from('menu-images') // ชื่อ bucket ที่เราสร้าง
+            .from('menu-images')
             .upload(fileName, file.buffer, {
                 contentType: file.mimetype,
                 cacheControl: '3600',
@@ -322,7 +345,6 @@ app.post('/api/upload-image', authenticateToken('admin'), upload.single('menuIma
             throw new Error(uploadError.message);
         }
 
-        // ดึง Public URL ของไฟล์ที่เพิ่งอัปโหลด
         const { data: urlData } = supabase.storage
             .from('menu-images')
             .getPublicUrl(fileName);
