@@ -202,23 +202,26 @@ app.get('/api/menu', async (req, res) => {
 });
 
 
+// วางโค้ดนี้ทับฟังก์ชัน app.post('/api/orders', ...) เดิมทั้งหมด
 app.post('/api/orders', async (req, res) => {
     try {
         const { cart, tableNumber, specialRequest, isTakeaway } = req.body;
 
+        // --- DEBUG LOG 1: ดูข้อมูลที่ส่งมาจากหน้าบ้าน ---
+        console.log("--- [DEBUG] Received New Order Request ---");
+        console.log("Cart Data:", JSON.stringify(cart, null, 2));
+        console.log(`Table: ${tableNumber}, Is Takeaway: ${isTakeaway}`);
+        
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
         }
 
         let finalTableName;
-
         if (isTakeaway && !tableNumber) {
             finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`; 
-        } 
-        else if (tableNumber) {
+        } else if (tableNumber) {
             finalTableName = tableNumber;
-        } 
-        else {
+        } else {
             return res.status(400).json({ status: 'error', message: 'Table number is required for dine-in orders.' });
         }
         
@@ -235,13 +238,22 @@ app.post('/api/orders', async (req, res) => {
         let calculatedSubtotal = 0;
         const processedCartForDb = [];
 
+        console.log("\n--- [DEBUG] Starting Price Calculation Loop ---");
         for (const item of cart) {
+            // --- DEBUG LOG 2: ดู ID ของสินค้าที่ใช้ค้นหา ---
+            console.log(`\nProcessing item.id: ${item.id}`);
+
             const itemResult = await pool.query('SELECT price, discount_percentage FROM menu_items WHERE id = $1', [item.id]);
+            
             if (itemResult.rows.length === 0) {
+                console.error(`[ERROR] Item with ID ${item.id} not found in database!`);
                 return res.status(404).json({ status: 'error', message: `Item with ID ${item.id} not found.` });
             }
 
             const dbItem = itemResult.rows[0];
+            // --- DEBUG LOG 3: ดูข้อมูลที่ได้จากฐานข้อมูล ---
+            console.log("DB item data:", dbItem);
+
             const basePrice = parseFloat(dbItem.price);
             const discountPercentage = parseFloat(dbItem.discount_percentage || 0);
             const priceAfterDiscount = basePrice - (basePrice * (discountPercentage / 100));
@@ -249,6 +261,9 @@ app.post('/api/orders', async (req, res) => {
             const finalItemPrice = priceAfterDiscount + optionsPrice;
 
             calculatedSubtotal += finalItemPrice * item.quantity;
+            
+            // --- DEBUG LOG 4: ดูการคำนวณราคาสุดท้ายของแต่ละรายการ ---
+            console.log(`Base Price: ${basePrice}, Options Price: ${optionsPrice}, Final Item Price: ${finalItemPrice}`);
             
             processedCartForDb.push({
                 id: item.uniqueId,
@@ -261,7 +276,11 @@ app.post('/api/orders', async (req, res) => {
                 selected_options_text_en: item.selected_options_text_en,
             });
         }
+        
         const finalTotal = calculatedSubtotal;
+        
+        // --- DEBUG LOG 5: ดูยอดรวมสุดท้ายก่อนบันทึกลงฐานข้อมูล ---
+        console.log("\n--- [DEBUG] Final Calculated Total:", finalTotal, "---\n");
 
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway)
