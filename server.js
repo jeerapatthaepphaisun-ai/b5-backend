@@ -891,12 +891,13 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), async (re
 });
 
 // --- NEW ENDPOINTS FOR CASHIER TAKEAWAY ---
+// API สำหรับให้แคชเชียร์ดึงรายการ Takeaway ที่รอจ่ายเงิน (ฉบับแก้ไข)
 app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
         const query = `
             SELECT 
                 table_name,
-                SUM(total) as grand_total,
+                SUM(CAST(total AS numeric)) as grand_total, -- แก้ไขโดยการแปลง total ให้เป็น numeric ก่อน SUM
                 json_agg(items) as all_items
             FROM orders
             WHERE table_name LIKE 'Takeaway-%' AND status != 'Paid'
