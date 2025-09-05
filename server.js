@@ -31,8 +31,6 @@ const upload = multer({ storage: multer.memoryStorage() });
 // =================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  idleTimeoutMillis: 0,
-  connectionTimeoutMillis: 0,
   host: 'db.ayqtdyhbzllolrewvxcw.supabase.co',
 });
 
@@ -212,24 +210,34 @@ app.post('/api/orders', async (req, res) => {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
         }
 
-        const finalTableName = isTakeaway ? 'Takeaway' : tableNumber;
+        let finalTableName;
 
-        if (!isTakeaway && tableNumber) {
-            const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
+        // กรณีลูกค้า Walk-in ที่สั่งกลับบ้านโดยเฉพาะ (ไม่มีโต๊ะ)
+        if (isTakeaway && !tableNumber) {
+            // เราจะสร้างชื่อโต๊ะชั่วคราวที่ไม่ซ้ำใคร เพื่อให้ครัวแยกออเดอร์ได้
+            finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`; 
+        } 
+        // กรณีลูกค้าอยู่ที่โต๊ะ (ไม่ว่าจะสั่งกินที่ร้าน หรือสั่งกลับบ้านเพิ่ม)
+        else if (tableNumber) {
+            finalTableName = tableNumber;
+        } 
+        // กรณีที่ข้อมูลผิดพลาด (ไม่ได้สั่งกลับบ้าน และไม่มีเลขโต๊ะ)
+        else {
+            return res.status(400).json({ status: 'error', message: 'Table number is required for dine-in orders.' });
+        }
+        
+        // อัปเดตสถานะโต๊ะให้เป็น "ไม่ว่าง" ถ้าโต๊ะนั้นยัง "ว่าง" อยู่
+        if (tableNumber) {
+             const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
             if (tableStatusResult.rowCount === 0) {
                 return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
             }
-            const currentStatus = tableStatusResult.rows[0].status;
-            if (currentStatus === 'Billing') {
-                return res.status(403).json({ status: 'error', message: 'โต๊ะนี้กำลังรอชำระเงิน ไม่สามารถสั่งอาหารเพิ่มได้' });
+            if (tableStatusResult.rows[0].status === 'Available') {
+                 await pool.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', tableNumber]);
             }
-            if (currentStatus === 'Available') {
-                await pool.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', tableNumber]);
-            }
-        } else if (!isTakeaway && !tableNumber) {
-            return res.status(400).json({ status: 'error', message: 'Table number is required for dine-in orders.' });
         }
 
+        // --- ส่วนของการคำนวณราคาสินค้า (ไม่มีการเปลี่ยนแปลง) ---
         let calculatedSubtotal = 0;
         const processedCartForDb = [];
 
@@ -259,12 +267,13 @@ app.post('/api/orders', async (req, res) => {
                 selected_options_text_en: item.selected_options_text_en,
             });
         }
-        
         const finalTotal = calculatedSubtotal;
+        // --- สิ้นสุดส่วนคำนวณราคา ---
 
+        // แก้ไขคำสั่ง SQL ให้เพิ่มข้อมูลลงในคอลัมน์ is_takeaway
         const query = `
-            INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *;
+            INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8) RETURNING *;
         `;
         const values = [
             finalTableName, 
@@ -273,7 +282,8 @@ app.post('/api/orders', async (req, res) => {
             0, 
             0, 
             finalTotal, 
-            specialRequest || ''
+            specialRequest || '',
+            isTakeaway || false // นี่คือค่าที่จะถูกบันทึกลงช่อง is_takeaway
         ];
         const result = await pool.query(query, values);
 
