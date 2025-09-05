@@ -206,13 +206,15 @@ app.get('/api/menu', async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
     try {
-        const { cart, tableNumber, specialRequest } = req.body;
+        const { cart, tableNumber, specialRequest, isTakeaway } = req.body;
 
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
         }
 
-        if (tableNumber) {
+        const finalTableName = isTakeaway ? 'Takeaway' : tableNumber;
+
+        if (!isTakeaway && tableNumber) {
             const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
             if (tableStatusResult.rowCount === 0) {
                 return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
@@ -224,6 +226,8 @@ app.post('/api/orders', async (req, res) => {
             if (currentStatus === 'Available') {
                 await pool.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', tableNumber]);
             }
+        } else if (!isTakeaway && !tableNumber) {
+            return res.status(400).json({ status: 'error', message: 'Table number is required for dine-in orders.' });
         }
 
         let calculatedSubtotal = 0;
@@ -263,7 +267,7 @@ app.post('/api/orders', async (req, res) => {
             VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending') RETURNING *;
         `;
         const values = [
-            tableNumber || 'N/A', 
+            finalTableName, 
             JSON.stringify(processedCartForDb), 
             calculatedSubtotal, 
             0, 
