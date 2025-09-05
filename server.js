@@ -212,21 +212,16 @@ app.post('/api/orders', async (req, res) => {
 
         let finalTableName;
 
-        // กรณีลูกค้า Walk-in ที่สั่งกลับบ้านโดยเฉพาะ (ไม่มีโต๊ะ)
         if (isTakeaway && !tableNumber) {
-            // เราจะสร้างชื่อโต๊ะชั่วคราวที่ไม่ซ้ำใคร เพื่อให้ครัวแยกออเดอร์ได้
             finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`; 
         } 
-        // กรณีลูกค้าอยู่ที่โต๊ะ (ไม่ว่าจะสั่งกินที่ร้าน หรือสั่งกลับบ้านเพิ่ม)
         else if (tableNumber) {
             finalTableName = tableNumber;
         } 
-        // กรณีที่ข้อมูลผิดพลาด (ไม่ได้สั่งกลับบ้าน และไม่มีเลขโต๊ะ)
         else {
             return res.status(400).json({ status: 'error', message: 'Table number is required for dine-in orders.' });
         }
         
-        // อัปเดตสถานะโต๊ะให้เป็น "ไม่ว่าง" ถ้าโต๊ะนั้นยัง "ว่าง" อยู่
         if (tableNumber) {
              const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
             if (tableStatusResult.rowCount === 0) {
@@ -237,7 +232,6 @@ app.post('/api/orders', async (req, res) => {
             }
         }
 
-        // --- ส่วนของการคำนวณราคาสินค้า (ไม่มีการเปลี่ยนแปลง) ---
         let calculatedSubtotal = 0;
         const processedCartForDb = [];
 
@@ -268,9 +262,7 @@ app.post('/api/orders', async (req, res) => {
             });
         }
         const finalTotal = calculatedSubtotal;
-        // --- สิ้นสุดส่วนคำนวณราคา ---
 
-        // แก้ไขคำสั่ง SQL ให้เพิ่มข้อมูลลงในคอลัมน์ is_takeaway
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway)
             VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8) RETURNING *;
@@ -283,7 +275,7 @@ app.post('/api/orders', async (req, res) => {
             0, 
             finalTotal, 
             specialRequest || '',
-            isTakeaway || false // นี่คือค่าที่จะถูกบันทึกลงช่อง is_takeaway
+            isTakeaway || false
         ];
         const result = await pool.query(query, values);
 
@@ -795,7 +787,7 @@ app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), asy
     }
 });
 
-app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
+app.get('/api/tables', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
         const query = `
             SELECT 
@@ -851,7 +843,7 @@ app.get('/api/tables', authenticateToken('cashier'), async (req, res) => {
     }
 });
 
-app.post('/api/clear-table', authenticateToken('cashier'), async (req, res) => {
+app.post('/api/clear-table', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
         const { tableName } = req.body;
         await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
@@ -864,7 +856,7 @@ app.post('/api/clear-table', authenticateToken('cashier'), async (req, res) => {
     }
 });
 
-app.post('/api/apply-discount', authenticateToken('cashier'), async (req, res) => {
+app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
         const { tableName, discountPercentage } = req.body;
         if (!tableName || discountPercentage === undefined) {
@@ -897,6 +889,42 @@ app.post('/api/apply-discount', authenticateToken('cashier'), async (req, res) =
         res.status(500).json({ status: 'error', message: 'Failed to apply discount.' });
     }
 });
+
+// --- NEW ENDPOINTS FOR CASHIER TAKEAWAY ---
+app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (req, res) => {
+    try {
+        const query = `
+            SELECT 
+                table_name,
+                SUM(total) as grand_total,
+                json_agg(items) as all_items
+            FROM orders
+            WHERE table_name LIKE 'Takeaway-%' AND status != 'Paid'
+            GROUP BY table_name
+            ORDER BY table_name;
+        `;
+        const result = await pool.query(query);
+        res.json({ status: 'success', data: result.rows });
+    } catch (error) {
+        console.error('Failed to fetch takeaway orders:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch takeaway orders.' });
+    }
+});
+
+app.post('/api/clear-takeaway', authenticateToken('cashier', 'admin'), async (req, res) => {
+    try {
+        const { tableName } = req.body; // e.g., "Takeaway-2523"
+        if (!tableName || !tableName.startsWith('Takeaway-')) {
+            return res.status(400).json({ status: 'error', message: 'Invalid takeaway name.' });
+        }
+        await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
+        res.json({ status: 'success', message: `Takeaway order ${tableName} cleared.` });
+    } catch (error) {
+        console.error('Failed to clear takeaway order:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to clear takeaway order.' });
+    }
+});
+// --- END NEW ENDPOINTS ---
 
 app.get('/api/tables-management', authenticateToken('admin'), async (req, res) => {
     try {
