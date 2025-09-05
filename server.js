@@ -17,7 +17,9 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
 app.use(cors({
-  origin: '*'
+  origin: "*",
+  methods: "GET,POST,PUT,DELETE,OPTIONS",
+  allowedHeaders: "Content-Type,Authorization"
 }));
 app.use(express.json());
 
@@ -201,16 +203,9 @@ app.get('/api/menu', async (req, res) => {
     }
 });
 
-
-// วางโค้ดนี้ทับฟังก์ชัน app.post('/api/orders', ...) เดิมทั้งหมด
 app.post('/api/orders', async (req, res) => {
     try {
         const { cart, tableNumber, specialRequest, isTakeaway } = req.body;
-
-        // --- DEBUG LOG 1: ดูข้อมูลที่ส่งมาจากหน้าบ้าน ---
-        console.log("--- [DEBUG] Received New Order Request ---");
-        console.log("Cart Data:", JSON.stringify(cart, null, 2));
-        console.log(`Table: ${tableNumber}, Is Takeaway: ${isTakeaway}`);
         
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
@@ -238,11 +233,7 @@ app.post('/api/orders', async (req, res) => {
         let calculatedSubtotal = 0;
         const processedCartForDb = [];
 
-        console.log("\n--- [DEBUG] Starting Price Calculation Loop ---");
         for (const item of cart) {
-            // --- DEBUG LOG 2: ดู ID ของสินค้าที่ใช้ค้นหา ---
-            console.log(`\nProcessing item.id: ${item.id}`);
-
             const itemResult = await pool.query('SELECT price, discount_percentage FROM menu_items WHERE id = $1', [item.id]);
             
             if (itemResult.rows.length === 0) {
@@ -251,9 +242,6 @@ app.post('/api/orders', async (req, res) => {
             }
 
             const dbItem = itemResult.rows[0];
-            // --- DEBUG LOG 3: ดูข้อมูลที่ได้จากฐานข้อมูล ---
-            console.log("DB item data:", dbItem);
-
             const basePrice = parseFloat(dbItem.price);
             const discountPercentage = parseFloat(dbItem.discount_percentage || 0);
             const priceAfterDiscount = basePrice - (basePrice * (discountPercentage / 100));
@@ -261,9 +249,6 @@ app.post('/api/orders', async (req, res) => {
             const finalItemPrice = priceAfterDiscount + optionsPrice;
 
             calculatedSubtotal += finalItemPrice * item.quantity;
-            
-            // --- DEBUG LOG 4: ดูการคำนวณราคาสุดท้ายของแต่ละรายการ ---
-            console.log(`Base Price: ${basePrice}, Options Price: ${optionsPrice}, Final Item Price: ${finalItemPrice}`);
             
             processedCartForDb.push({
                 id: item.uniqueId,
@@ -279,9 +264,6 @@ app.post('/api/orders', async (req, res) => {
         
         const finalTotal = calculatedSubtotal;
         
-        // --- DEBUG LOG 5: ดูยอดรวมสุดท้ายก่อนบันทึกลงฐานข้อมูล ---
-        console.log("\n--- [DEBUG] Final Calculated Total:", finalTotal, "---\n");
-
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway)
             VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8) RETURNING *;
@@ -345,9 +327,6 @@ app.get('/api/table-status/:tableName', async (req, res) => {
     }
 });
 
-// =================================================================
-// --- API Endpoint for Image Upload ---
-// =================================================================
 app.post('/api/upload-image', authenticateToken('admin'), upload.single('menuImage'), async (req, res) => {
     try {
         if (!req.file) {
@@ -910,14 +889,18 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), async (re
 });
 
 // --- NEW ENDPOINTS FOR CASHIER TAKEAWAY ---
-// API สำหรับให้แคชเชียร์ดึงรายการ Takeaway ที่รอจ่ายเงิน (ฉบับแก้ไข)
+// API สำหรับให้แคชเชียร์ดึงรายการ Takeaway ที่รอจ่ายเงิน (ฉบับแก้ไขใหม่)
 app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
         const query = `
             SELECT 
                 table_name,
-                SUM(CAST(total AS numeric)) as grand_total, -- แก้ไขโดยการแปลง total ให้เป็น numeric ก่อน SUM
-                json_agg(items) as all_items
+                json_agg(
+                    json_build_object(
+                        'items', items,
+                        'total', total
+                    ) ORDER BY created_at
+                ) as orders_data
             FROM orders
             WHERE table_name LIKE 'Takeaway-%' AND status != 'Paid'
             GROUP BY table_name
