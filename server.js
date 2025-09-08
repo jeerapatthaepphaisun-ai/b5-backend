@@ -540,11 +540,19 @@ app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
         if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         
+        let isRecommendedStatus = false;
+        if (category_id) {
+            const categoryResult = await pool.query('SELECT name_th FROM categories WHERE id = $1', [category_id]);
+            if (categoryResult.rows.length > 0 && categoryResult.rows[0].name_th === 'เมนูแนะนำ') {
+                isRecommendedStatus = true;
+            }
+        }
+        
         const query = `
-            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, is_recommended)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0, isRecommendedStatus];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -571,12 +579,21 @@ app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
+        
+        let isRecommendedStatus = false;
+        if (category_id) {
+            const categoryResult = await pool.query('SELECT name_th FROM categories WHERE id = $1', [category_id]);
+            if (categoryResult.rows.length > 0 && categoryResult.rows[0].name_th === 'เมนูแนะนำ') {
+                isRecommendedStatus = true;
+            }
+        }
+        
         const query = `
             UPDATE menu_items 
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9
-            WHERE id = $10 RETURNING *;
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9, is_recommended = $10
+            WHERE id = $11 RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, id];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, isRecommendedStatus, id];
         const result = await pool.query(query, values);
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -888,9 +905,6 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), async (re
     }
 });
 
-// --- NEW ENDPOINTS FOR CASHIER TAKEAWAY ---
-// API สำหรับให้แคชเชียร์ดึงรายการ Takeaway ที่รอจ่ายเงิน (ฉบับแก้ไขใหม่)
-// ในไฟล์ server.js (b5-backend)
 app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
         const query = `
@@ -912,12 +926,11 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
         `;
         const result = await pool.query(query);
         
-        // เพิ่มการคำนวณยอดรวมใหม่ เพื่อให้รองรับส่วนลด
         const processedData = result.rows.map(group => {
             const subtotal = group.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
             const discountAmount = group.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
             const total = group.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
-            const discountPercentage = group.orders_data[0]?.discount_percentage || 0; // เอา % จากออเดอร์แรก
+            const discountPercentage = group.orders_data[0]?.discount_percentage || 0;
 
             return {
                 table_name: group.table_name,
@@ -938,7 +951,7 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
 
 app.post('/api/clear-takeaway', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
-        const { tableName } = req.body; // e.g., "Takeaway-2523"
+        const { tableName } = req.body;
         if (!tableName || !tableName.startsWith('Takeaway-')) {
             return res.status(400).json({ status: 'error', message: 'Invalid takeaway name.' });
         }
@@ -949,7 +962,6 @@ app.post('/api/clear-takeaway', authenticateToken('cashier', 'admin'), async (re
         res.status(500).json({ status: 'error', message: 'Failed to clear takeaway order.' });
     }
 });
-// --- END NEW ENDPOINTS ---
 
 app.get('/api/tables-management', authenticateToken('admin'), async (req, res) => {
     try {
