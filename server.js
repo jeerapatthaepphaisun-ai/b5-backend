@@ -11,6 +11,7 @@ const { Pool } = require('pg');
 const { formatInTimeZone } = require('date-fns-tz');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws'); // New: WebSocket
 
 const app = express();
 const server = http.createServer(app);
@@ -26,6 +27,22 @@ app.use(express.json());
 // Supabase & Multer Setup
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const upload = multer({ storage: multer.memoryStorage() });
+
+// New: WebSocket Server Setup
+const wss = new WebSocket.Server({ server });
+
+wss.on('connection', ws => {
+  console.log('Client connected via WebSocket');
+  ws.on('close', () => console.log('Client disconnected'));
+});
+
+function broadcast(data) {
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(data));
+        }
+    });
+}
 
 
 // =================================================================
@@ -70,7 +87,7 @@ function authenticateToken(...allowedRoles) {
 // --- API Endpoints ---
 // =================================================================
 
-app.get('/', (req, res) => res.status(200).send('B5 Restaurant Backend is running with Supabase!'));
+app.get('/', (req, res) => res.status(200).send('Tonnam Cafe Backend is running with Supabase!'));
 
 app.post('/api/login', async (req, res) => {
     try {
@@ -255,7 +272,10 @@ app.get('/api/cafe-menu', async (req, res) => {
 });
 
 app.post('/api/orders', async (req, res) => {
+    const client = await pool.connect();
     try {
+        await client.query('BEGIN');
+
         const { cart, tableNumber, specialRequest, isTakeaway, orderSource } = req.body;
         
         if (!cart || cart.length === 0) {
@@ -274,12 +294,12 @@ app.post('/api/orders', async (req, res) => {
         }
         
         if (tableNumber) {
-             const tableStatusResult = await pool.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
+             const tableStatusResult = await client.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
             if (tableStatusResult.rowCount === 0) {
                 return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
             }
             if (tableStatusResult.rows[0].status === 'Available') {
-                 await pool.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', tableNumber]);
+                 await client.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', tableNumber]);
             }
         }
 
@@ -287,24 +307,36 @@ app.post('/api/orders', async (req, res) => {
         const processedCartForDb = [];
 
         for (const item of cart) {
-            const itemResult = await pool.query('SELECT price, discount_percentage FROM menu_items WHERE id = $1', [item.id]);
+            const itemResult = await client.query('SELECT price, discount_percentage, stock_status FROM menu_items WHERE id = $1', [item.id]);
             
             if (itemResult.rows.length === 0) {
-                console.error(`[ERROR] Item with ID ${item.id} not found in database!`);
-                return res.status(404).json({ status: 'error', message: `Item with ID ${item.id} not found.` });
+                throw new Error(`Item with ID ${item.id} not found.`);
+            }
+            if (itemResult.rows[0].stock_status === 'out_of_stock') {
+                throw new Error(`Item "${item.name_th}" is out of stock.`);
             }
 
             const dbItem = itemResult.rows[0];
             const basePrice = parseFloat(dbItem.price);
             const discountPercentage = parseFloat(dbItem.discount_percentage || 0);
             const priceAfterDiscount = basePrice - (basePrice * (discountPercentage / 100));
-            const optionsPrice = parseFloat(item.selected_options_price || 0);
+            
+            // Recalculate options price from backend to prevent client-side manipulation
+            let optionsPrice = 0;
+            if (item.selected_options && Array.isArray(item.selected_options)) {
+                for (const option of item.selected_options) {
+                    const optionResult = await client.query('SELECT price_add FROM menu_options WHERE id = $1', [option.option_id]);
+                    if (optionResult.rows.length > 0) {
+                        optionsPrice += parseFloat(optionResult.rows[0].price_add);
+                    }
+                }
+            }
             const finalItemPrice = priceAfterDiscount + optionsPrice;
 
             calculatedSubtotal += finalItemPrice * item.quantity;
             
             processedCartForDb.push({
-                id: item.uniqueId,
+                unique_id: item.uniqueId,
                 name_th: item.name_th,
                 name_en: item.name_en,
                 category_th: item.category_th,
@@ -313,6 +345,16 @@ app.post('/api/orders', async (req, res) => {
                 selected_options_text_th: item.selected_options_text_th,
                 selected_options_text_en: item.selected_options_text_en,
             });
+            
+            // Update stock
+            await client.query(
+                `UPDATE menu_items SET stock_status = 'out_of_stock' WHERE id = $1 AND current_stock - $2 <= 0`, 
+                [item.id, item.quantity]
+            );
+            await client.query(
+                `UPDATE menu_items SET current_stock = current_stock - $1 WHERE id = $2`, 
+                [item.quantity, item.id]
+            );
         }
         
         const finalTotal = calculatedSubtotal;
@@ -331,13 +373,24 @@ app.post('/api/orders', async (req, res) => {
             specialRequest || '',
             isTakeaway || false
         ];
-        const result = await pool.query(query, values);
+        const result = await client.query(query, values);
+        
+        await client.query('COMMIT');
+        
+        const newOrder = result.rows[0];
+        broadcast({
+            type: 'newOrder',
+            order: newOrder
+        });
 
-        res.status(201).json({ status: 'success', data: result.rows[0] });
+        res.status(201).json({ status: 'success', data: newOrder });
 
     } catch (error) {
+        await client.query('ROLLBACK');
         console.error('Failed to create order:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to create order.' });
+        res.status(500).json({ status: 'error', message: `Failed to create order: ${error.message}` });
+    } finally {
+        client.release();
     }
 });
 
@@ -590,7 +643,7 @@ app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) =
 
 app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock } = req.body;
         if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         
         let isRecommendedStatus = false;
@@ -602,10 +655,10 @@ app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
         }
         
         const query = `
-            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, is_recommended)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, is_recommended, current_stock)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0, isRecommendedStatus];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0, isRecommendedStatus, current_stock || 0];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -631,7 +684,7 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
 app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock } = req.body;
         
         let isRecommendedStatus = false;
         if (category_id) {
@@ -643,10 +696,10 @@ app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
         
         const query = `
             UPDATE menu_items 
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9, is_recommended = $10
-            WHERE id = $11 RETURNING *;
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9, is_recommended = $10, current_stock = $11
+            WHERE id = $12 RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, isRecommendedStatus, id];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, isRecommendedStatus, current_stock, id];
         const result = await pool.query(query, values);
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -1151,5 +1204,5 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
 // --- Server Start ---
 // =================================================================
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
+  console.log(`🚀 Tonnam Cafe Backend is running on port ${PORT}`);
 });
