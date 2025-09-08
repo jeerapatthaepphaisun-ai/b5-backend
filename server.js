@@ -155,7 +155,7 @@ app.get('/api/menu', async (req, res) => {
         const menuQuery = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             ${baseQuery}
-            ORDER BY c.sort_order ASC, mi.name_th ASC
+            ORDER BY c.sort_order ASC, mi.is_recommended DESC, mi.name_th ASC
             LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length};
         `;
         
@@ -200,6 +200,57 @@ app.get('/api/menu', async (req, res) => {
     } catch (error) {
         console.error('Error fetching paginated menu:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch menu.' });
+    }
+});
+
+app.get('/api/cafe-menu', async (req, res) => {
+    try {
+        const query = `
+            SELECT mi.*, c.name_th as category_th, c.name_en as category_en
+            FROM menu_items mi
+            JOIN categories c ON mi.category_id = c.id
+            WHERE c.station_type = 'bar'
+            ORDER BY c.sort_order ASC, mi.is_recommended DESC, mi.name_th ASC;
+        `;
+        const result = await pool.query(query);
+        
+        let menuItems = result.rows;
+        if (menuItems.length > 0) {
+            const optionsResult = await pool.query('SELECT * FROM menu_options;');
+            const optionsMap = optionsResult.rows.reduce((map, row) => {
+                const { option_set_id, id, label_th, label_en, price_add } = row;
+                if (!map[option_set_id]) map[option_set_id] = [];
+                map[option_set_id].push({ option_id: id, label_th, label_en, price_add: parseFloat(price_add) });
+                return map;
+            }, {});
+
+            const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets;');
+            const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
+                if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
+                map[row.menu_item_id].push(row.option_set_id);
+                return map;
+            }, {});
+            
+            menuItems = menuItems.map(item => {
+                const optionSetIds = menuOptionsLink[item.id] || [];
+                item.option_groups = optionSetIds.reduce((groups, id) => {
+                    if (optionsMap[id]) groups[id] = optionsMap[id];
+                    return groups;
+                }, {});
+                return item;
+            });
+        }
+
+        res.json({
+            status: 'success',
+            data: {
+                items: menuItems
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching cafe menu:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch cafe menu.' });
     }
 });
 
