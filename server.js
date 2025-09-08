@@ -890,6 +890,7 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), async (re
 
 // --- NEW ENDPOINTS FOR CASHIER TAKEAWAY ---
 // API สำหรับให้แคชเชียร์ดึงรายการ Takeaway ที่รอจ่ายเงิน (ฉบับแก้ไขใหม่)
+// ในไฟล์ server.js (b5-backend)
 app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
         const query = `
@@ -898,7 +899,10 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
                 json_agg(
                     json_build_object(
                         'items', items,
-                        'total', total
+                        'subtotal', subtotal,
+                        'discount_amount', discount_amount,
+                        'total', total,
+                        'discount_percentage', discount_percentage
                     ) ORDER BY created_at
                 ) as orders_data
             FROM orders
@@ -907,7 +911,25 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
             ORDER BY table_name;
         `;
         const result = await pool.query(query);
-        res.json({ status: 'success', data: result.rows });
+        
+        // เพิ่มการคำนวณยอดรวมใหม่ เพื่อให้รองรับส่วนลด
+        const processedData = result.rows.map(group => {
+            const subtotal = group.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
+            const discountAmount = group.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
+            const total = group.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
+            const discountPercentage = group.orders_data[0]?.discount_percentage || 0; // เอา % จากออเดอร์แรก
+
+            return {
+                table_name: group.table_name,
+                all_items: group.orders_data.flatMap(order => order.items),
+                subtotal,
+                discountAmount,
+                grand_total: total,
+                discountPercentage
+            };
+        });
+
+        res.json({ status: 'success', data: processedData });
     } catch (error) {
         console.error('Failed to fetch takeaway orders:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch takeaway orders.' });
