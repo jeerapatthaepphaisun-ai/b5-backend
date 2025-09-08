@@ -256,14 +256,16 @@ app.get('/api/cafe-menu', async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
     try {
-        const { cart, tableNumber, specialRequest, isTakeaway } = req.body;
+        const { cart, tableNumber, specialRequest, isTakeaway, orderSource } = req.body;
         
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
         }
 
         let finalTableName;
-        if (isTakeaway && !tableNumber) {
+        if (orderSource === 'bar') {
+            finalTableName = `Bar-${Math.floor(1000 + Math.random() * 9000)}`;
+        } else if (isTakeaway && !tableNumber) {
             finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`; 
         } else if (tableNumber) {
             finalTableName = tableNumber;
@@ -1003,11 +1005,11 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
 app.post('/api/clear-takeaway', authenticateToken('cashier', 'admin'), async (req, res) => {
     try {
         const { tableName } = req.body;
-        if (!tableName || !tableName.startsWith('Takeaway-')) {
-            return res.status(400).json({ status: 'error', message: 'Invalid takeaway name.' });
+        if (!tableName || (!tableName.startsWith('Takeaway-') && !tableName.startsWith('Bar-'))) {
+            return res.status(400).json({ status: 'error', message: 'Invalid order name.' });
         }
         await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
-        res.json({ status: 'success', message: `Takeaway order ${tableName} cleared.` });
+        res.json({ status: 'success', message: `Order ${tableName} cleared.` });
     } catch (error) {
         console.error('Failed to clear takeaway order:', error);
         res.status(500).json({ status: 'error', message: 'Failed to clear takeaway order.' });
