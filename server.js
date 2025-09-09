@@ -275,6 +275,7 @@ app.post('/api/orders', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        await client.query("SET TimeZone = 'Asia/Bangkok';"); // ตั้งค่า Timezone
 
         const { cart, tableNumber, specialRequest, isTakeaway, orderSource } = req.body;
         
@@ -283,8 +284,28 @@ app.post('/api/orders', async (req, res) => {
         }
 
         let finalTableName;
+
+        // --- START: LOGIC การรันเลข Takeaway ใหม่ ---
         if (orderSource === 'bar') {
-            finalTableName = `Bar-${Math.floor(1000 + Math.random() * 9000)}`;
+            // ค้นหาเลข Takeaway ล่าสุดของวันนี้
+            const lastTakeawayQuery = `
+                SELECT table_name FROM orders 
+                WHERE table_name LIKE 'Takeaway-%' 
+                AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE 
+                ORDER BY created_at DESC 
+                LIMIT 1;
+            `;
+            const lastTakeawayResult = await client.query(lastTakeawayQuery);
+            
+            let nextNumber = 1;
+            if (lastTakeawayResult.rows.length > 0) {
+                const lastTakeawayName = lastTakeawayResult.rows[0].table_name;
+                const lastNumber = parseInt(lastTakeawayName.split('-')[1] || '0', 10);
+                nextNumber = lastNumber + 1;
+            }
+            finalTableName = `Takeaway-${nextNumber}`;
+        // --- END: LOGIC การรันเลข Takeaway ใหม่ ---
+
         } else if (isTakeaway && !tableNumber) {
             finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`; 
         } else if (tableNumber) {
@@ -307,13 +328,13 @@ app.post('/api/orders', async (req, res) => {
         const processedCartForDb = [];
 
         for (const item of cart) {
-            const itemResult = await client.query('SELECT price, discount_percentage, stock_status FROM menu_items WHERE id = $1', [item.id]);
+            const itemResult = await client.query('SELECT price, discount_percentage, stock_status, name_th FROM menu_items WHERE id = $1', [item.id]);
             
             if (itemResult.rows.length === 0) {
                 throw new Error(`Item with ID ${item.id} not found.`);
             }
             if (itemResult.rows[0].stock_status === 'out_of_stock') {
-                throw new Error(`Item "${item.name_th}" is out of stock.`);
+                throw new Error(`Item "${itemResult.rows[0].name_th}" is out of stock.`);
             }
 
             const dbItem = itemResult.rows[0];
@@ -321,7 +342,6 @@ app.post('/api/orders', async (req, res) => {
             const discountPercentage = parseFloat(dbItem.discount_percentage || 0);
             const priceAfterDiscount = basePrice - (basePrice * (discountPercentage / 100));
             
-            // Recalculate options price from backend to prevent client-side manipulation
             let optionsPrice = 0;
             if (item.selected_options && Array.isArray(item.selected_options)) {
                 for (const option of item.selected_options) {
@@ -346,15 +366,16 @@ app.post('/api/orders', async (req, res) => {
                 selected_options_text_en: item.selected_options_text_en,
             });
             
-            // Update stock
-            await client.query(
-                `UPDATE menu_items SET stock_status = 'out_of_stock' WHERE id = $1 AND current_stock - $2 <= 0`, 
-                [item.id, item.quantity]
-            );
-            await client.query(
-                `UPDATE menu_items SET current_stock = current_stock - $1 WHERE id = $2`, 
-                [item.quantity, item.id]
-            );
+            if (item.id) { // Ensure item.id exists before running stock updates
+                await client.query(
+                    `UPDATE menu_items SET current_stock = GREATEST(0, current_stock - $1) WHERE id = $2`, 
+                    [item.quantity, item.id]
+                );
+                await client.query(
+                    `UPDATE menu_items SET stock_status = 'out_of_stock' WHERE id = $1 AND manage_stock = true AND current_stock <= 0`, 
+                    [item.id]
+                );
+            }
         }
         
         const finalTotal = calculatedSubtotal;
@@ -371,7 +392,7 @@ app.post('/api/orders', async (req, res) => {
             0, 
             finalTotal, 
             specialRequest || '',
-            isTakeaway || false
+            true // Orders from Bar POS are always considered takeaway
         ];
         const result = await client.query(query, values);
         
