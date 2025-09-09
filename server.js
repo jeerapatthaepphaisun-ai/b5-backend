@@ -11,7 +11,7 @@ const { Pool } = require('pg');
 const { formatInTimeZone } = require('date-fns-tz');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
-const WebSocket = require('ws'); // New: WebSocket
+const WebSocket = require('ws');
 
 const app = express();
 const server = http.createServer(app);
@@ -28,7 +28,7 @@ app.use(express.json());
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const upload = multer({ storage: multer.memoryStorage() });
 
-// New: WebSocket Server Setup
+// WebSocket Server Setup
 const wss = new WebSocket.Server({ server });
 
 wss.on('connection', ws => {
@@ -222,14 +222,29 @@ app.get('/api/menu', async (req, res) => {
 
 app.get('/api/cafe-menu', async (req, res) => {
     try {
+        const { category, search } = req.query;
+
+        let queryParams = ['bar'];
+        let whereClauses = ["c.station_type = $1"];
+
+        if (category) {
+            queryParams.push(category);
+            whereClauses.push(`c.id = $${queryParams.length}`);
+        }
+
+        if (search) {
+            queryParams.push(`%${search}%`);
+            whereClauses.push(`(mi.name_th ILIKE $${queryParams.length} OR mi.name_en ILIKE $${queryParams.length})`);
+        }
+
         const query = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             FROM menu_items mi
             JOIN categories c ON mi.category_id = c.id
-            WHERE c.station_type = 'bar'
+            WHERE ${whereClauses.join(' AND ')}
             ORDER BY c.sort_order ASC, mi.is_recommended DESC, mi.name_th ASC;
         `;
-        const result = await pool.query(query);
+        const result = await pool.query(query, queryParams);
         
         let menuItems = result.rows;
         if (menuItems.length > 0) {
@@ -275,9 +290,9 @@ app.post('/api/orders', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        await client.query("SET TimeZone = 'Asia/Bangkok';"); // ตั้งค่า Timezone
+        await client.query("SET TimeZone = 'Asia/Bangkok';");
 
-        const { cart, tableNumber, specialRequest, isTakeaway, orderSource } = req.body;
+        const { cart, specialRequest, orderSource, discountPercentage = 0 } = req.body; 
         
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
@@ -285,16 +300,13 @@ app.post('/api/orders', async (req, res) => {
 
         let finalTableName;
 
-        // --- START: LOGIC การรันเลข Takeaway ใหม่ ---
         if (orderSource === 'bar') {
-            // ค้นหาเลข Takeaway ล่าสุดของวันนี้
             const lastTakeawayQuery = `
                 SELECT table_name FROM orders 
                 WHERE table_name LIKE 'Takeaway-%' 
                 AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE 
                 ORDER BY created_at DESC 
-                LIMIT 1;
-            `;
+                LIMIT 1;`;
             const lastTakeawayResult = await client.query(lastTakeawayQuery);
             
             let nextNumber = 1;
@@ -304,24 +316,19 @@ app.post('/api/orders', async (req, res) => {
                 nextNumber = lastNumber + 1;
             }
             finalTableName = `Takeaway-${nextNumber}`;
-        // --- END: LOGIC การรันเลข Takeaway ใหม่ ---
-
-        } else if (isTakeaway && !tableNumber) {
-            finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`; 
-        } else if (tableNumber) {
-            finalTableName = tableNumber;
-        } else {
-            return res.status(400).json({ status: 'error', message: 'Table number is required for dine-in orders.' });
-        }
-        
-        if (tableNumber) {
-             const tableStatusResult = await client.query('SELECT status FROM tables WHERE name = $1', [tableNumber]);
+        } else if (req.body.isTakeaway && !req.body.tableNumber) { // Fallback for other takeaway types
+            finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`;
+        } else if (req.body.tableNumber) {
+            finalTableName = req.body.tableNumber;
+            const tableStatusResult = await client.query('SELECT status FROM tables WHERE name = $1', [finalTableName]);
             if (tableStatusResult.rowCount === 0) {
                 return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
             }
             if (tableStatusResult.rows[0].status === 'Available') {
-                 await client.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', tableNumber]);
+                await client.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', finalTableName]);
             }
+        } else {
+            return res.status(400).json({ status: 'error', message: 'Table number or valid source is required.' });
         }
 
         let calculatedSubtotal = 0;
@@ -339,21 +346,8 @@ app.post('/api/orders', async (req, res) => {
 
             const dbItem = itemResult.rows[0];
             const basePrice = parseFloat(dbItem.price);
-            const discountPercentage = parseFloat(dbItem.discount_percentage || 0);
-            const priceAfterDiscount = basePrice - (basePrice * (discountPercentage / 100));
             
-            let optionsPrice = 0;
-            if (item.selected_options && Array.isArray(item.selected_options)) {
-                for (const option of item.selected_options) {
-                    const optionResult = await client.query('SELECT price_add FROM menu_options WHERE id = $1', [option.option_id]);
-                    if (optionResult.rows.length > 0) {
-                        optionsPrice += parseFloat(optionResult.rows[0].price_add);
-                    }
-                }
-            }
-            const finalItemPrice = priceAfterDiscount + optionsPrice;
-
-            calculatedSubtotal += finalItemPrice * item.quantity;
+            calculatedSubtotal += basePrice * item.quantity;
             
             processedCartForDb.push({
                 unique_id: item.uniqueId,
@@ -361,48 +355,53 @@ app.post('/api/orders', async (req, res) => {
                 name_en: item.name_en,
                 category_th: item.category_th,
                 quantity: item.quantity,
-                price: finalItemPrice,
+                price: basePrice,
                 selected_options_text_th: item.selected_options_text_th,
                 selected_options_text_en: item.selected_options_text_en,
             });
             
-            if (item.id) { // Ensure item.id exists before running stock updates
+            if (item.id) {
                 await client.query(
-                    `UPDATE menu_items SET current_stock = GREATEST(0, current_stock - $1) WHERE id = $2`, 
+                    `UPDATE menu_items SET current_stock = GREATEST(0, current_stock - $1) WHERE id = $2 AND manage_stock = true`, 
                     [item.quantity, item.id]
-                );
-                await client.query(
-                    `UPDATE menu_items SET stock_status = 'out_of_stock' WHERE id = $1 AND manage_stock = true AND current_stock <= 0`, 
-                    [item.id]
                 );
             }
         }
+
+        await client.query(`UPDATE menu_items SET stock_status = 'out_of_stock' WHERE manage_stock = true AND current_stock <= 0`);
         
-        const finalTotal = calculatedSubtotal;
+        const subtotal = calculatedSubtotal;
+        const discountAmount = subtotal * (discountPercentage / 100);
+        const finalTotal = subtotal - discountAmount;
+        const finalStatus = orderSource === 'bar' ? 'Paid' : 'Pending';
         
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8) RETURNING *;
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
         `;
         const values = [
             finalTableName, 
             JSON.stringify(processedCartForDb), 
-            calculatedSubtotal, 
-            0, 
-            0, 
+            subtotal, 
+            discountPercentage, 
+            discountAmount, 
             finalTotal, 
             specialRequest || '',
-            true // Orders from Bar POS are always considered takeaway
+            finalStatus,
+            req.body.isTakeaway || orderSource === 'bar'
         ];
         const result = await client.query(query, values);
         
         await client.query('COMMIT');
         
         const newOrder = result.rows[0];
-        broadcast({
-            type: 'newOrder',
-            order: newOrder
-        });
+
+        if (newOrder.status !== 'Paid') {
+            broadcast({
+                type: 'newOrder',
+                order: newOrder
+            });
+        }
 
         res.status(201).json({ status: 'success', data: newOrder });
 
@@ -414,6 +413,7 @@ app.post('/api/orders', async (req, res) => {
         client.release();
     }
 });
+
 
 app.post('/api/request-bill', async (req, res) => {
     try {
@@ -1133,6 +1133,21 @@ app.delete('/api/tables/:id', authenticateToken('admin'), async (req, res) => {
         }
         console.error('Error deleting table:', error);
         res.status(500).json({ status: 'error', message: 'Failed to delete table.' });
+    }
+});
+
+app.get('/api/bar-categories', async (req, res) => {
+    try {
+        const query = `
+            SELECT id, name_th, name_en 
+            FROM categories 
+            WHERE station_type = 'bar' 
+            ORDER BY sort_order ASC`;
+        const result = await pool.query(query);
+        res.json({ status: 'success', data: result.rows });
+    } catch (error) {
+        console.error('Failed to fetch bar categories:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch bar categories.' });
     }
 });
 
