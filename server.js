@@ -302,14 +302,18 @@ app.get('/api/cafe-menu', async (req, res) => {
     }
 });
 
+// แก้ไขฟังก์ชัน app.post('/api/orders', ...) ทั้งหมดด้วยโค้ดชุดนี้
 app.post('/api/orders', decodeTokenOptional, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query("SET TimeZone = 'Asia/Bangkok';");
 
-        const { cart, specialRequest, orderSource, discountPercentage = 0 } = req.body;
-        
+        // --- START: ส่วนที่แก้ไข ---
+        // เพิ่ม isTakeaway เข้ามาในการดึงข้อมูลจาก req.body
+        const { cart, tableNumber, specialRequest, isTakeaway, orderSource, discountPercentage = 0 } = req.body; 
+        // --- END: ส่วนที่แก้ไข ---
+
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
         }
@@ -331,7 +335,7 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
                 ORDER BY created_at DESC 
                 LIMIT 1;`;
             const lastTakeawayResult = await client.query(lastTakeawayQuery);
-            
+
             let nextNumber = 1;
             if (lastTakeawayResult.rows.length > 0) {
                 const lastTakeawayName = lastTakeawayResult.rows[0].table_name;
@@ -339,16 +343,27 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
                 nextNumber = lastNumber + 1;
             }
             finalTableName = `Takeaway-${nextNumber}`;
-        } else {
+        } else if (isTakeaway && !tableNumber) { 
             finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`;
+        } else if (tableNumber) {
+            finalTableName = tableNumber;
+            const tableStatusResult = await client.query('SELECT status FROM tables WHERE name = $1', [finalTableName]);
+            if (tableStatusResult.rowCount === 0) {
+                return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
+            }
+            if (tableStatusResult.rows[0].status === 'Available') {
+                await client.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', finalTableName]);
+            }
+        } else {
+             return res.status(400).json({ status: 'error', message: 'Table number or valid source is required.' });
         }
-        
+
         let calculatedSubtotal = 0;
         const processedCartForDb = [];
 
         for (const item of cart) {
             const itemResult = await client.query('SELECT price, discount_percentage, stock_status, name_th FROM menu_items WHERE id = $1', [item.id]);
-            
+
             if (itemResult.rows.length === 0) {
                 throw new Error(`Item with ID ${item.id} not found.`);
             }
@@ -358,9 +373,9 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
 
             const dbItem = itemResult.rows[0];
             const basePrice = parseFloat(dbItem.price);
-            
+
             calculatedSubtotal += basePrice * item.quantity;
-            
+
             processedCartForDb.push({
                 id: item.id,
                 uniqueId: item.uniqueId,
@@ -372,7 +387,7 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
                 selected_options_text_th: item.selected_options_text_th,
                 selected_options_text_en: item.selected_options_text_en,
             });
-            
+
             if (item.id) {
                 await client.query(
                     `UPDATE menu_items SET current_stock = GREATEST(0, current_stock - $1) WHERE id = $2 AND manage_stock = true`, 
@@ -382,12 +397,12 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
         }
 
         await client.query(`UPDATE menu_items SET stock_status = 'out_of_stock' WHERE manage_stock = true AND current_stock <= 0`);
-        
+
         const subtotal = calculatedSubtotal;
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
         const finalStatus = (orderSource === 'bar' && req.user) ? 'Paid' : 'Pending';
-        
+
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
@@ -401,13 +416,13 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
             finalTotal, 
             specialRequest || '',
             finalStatus,
-            true,
+            isTakeaway, // <-- **จุดที่แก้ไข** ใช้ค่า isTakeaway ที่ส่งมาจาก Frontend
             discountedByUser
         ];
         const result = await client.query(query, values);
-        
+
         await client.query('COMMIT');
-        
+
         const newOrder = result.rows[0];
 
         if (newOrder.status !== 'Paid') {
