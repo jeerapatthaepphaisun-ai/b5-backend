@@ -286,12 +286,12 @@ app.get('/api/cafe-menu', async (req, res) => {
     }
 });
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', authenticateToken('bar', 'admin'), async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query("SET TimeZone = 'Asia/Bangkok';");
-
+    
         const { cart, specialRequest, orderSource, discountPercentage = 0 } = req.body; 
         
         if (!cart || cart.length === 0) {
@@ -316,7 +316,7 @@ app.post('/api/orders', async (req, res) => {
                 nextNumber = lastNumber + 1;
             }
             finalTableName = `Takeaway-${nextNumber}`;
-        } else if (req.body.isTakeaway && !req.body.tableNumber) { // Fallback for other takeaway types
+        } else if (req.body.isTakeaway && !req.body.tableNumber) {
             finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`;
         } else if (req.body.tableNumber) {
             finalTableName = req.body.tableNumber;
@@ -375,10 +375,11 @@ app.post('/api/orders', async (req, res) => {
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
         const finalStatus = orderSource === 'bar' ? 'Paid' : 'Pending';
+        const discountedByUser = req.user.username;
         
         const query = `
-            INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
+            INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
         `;
         const values = [
             finalTableName, 
@@ -389,7 +390,8 @@ app.post('/api/orders', async (req, res) => {
             finalTotal, 
             specialRequest || '',
             finalStatus,
-            req.body.isTakeaway || orderSource === 'bar'
+            req.body.isTakeaway || orderSource === 'bar',
+            discountPercentage > 0 ? discountedByUser : null
         ];
         const result = await client.query(query, values);
         
@@ -1010,31 +1012,29 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), async (re
         if (!tableName || discountPercentage === undefined) {
             return res.status(400).json({ status: 'error', message: 'Table name and discount percentage are required.' });
         }
-
+    
         const ordersResult = await pool.query(
             "SELECT id, subtotal FROM orders WHERE table_name = $1 AND status != 'Paid'", 
             [tableName]
         );
-
+    
         if (ordersResult.rowCount === 0) {
             return res.status(404).json({ status: 'error', message: 'No active orders found for this table.' });
         }
-
-        // ดึงชื่อผู้ใช้จาก token ที่ login เข้ามา
+    
         const discountedByUser = req.user.username;
 
         for (const order of ordersResult.rows) {
             const subtotal = parseFloat(order.subtotal);
             const discountAmount = subtotal * (discountPercentage / 100);
             const newTotal = subtotal - discountAmount;
-
-            // เพิ่มการอัปเดตคอลัมน์ discount_by
+    
             await pool.query(
                 'UPDATE orders SET discount_percentage = $1, discount_amount = $2, total = $3, discount_by = $4 WHERE id = $5',
                 [discountPercentage, discountAmount, newTotal, discountedByUser, order.id]
             );
         }
-
+    
         res.json({ status: 'success', message: `Discount of ${discountPercentage}% applied to table ${tableName}.` });
     } catch (error) {
         console.error('Error applying discount:', error);
@@ -1279,7 +1279,7 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
         const summaryData = summaryResult.rows[0];
 
         const discountedOrdersQuery = `
-            SELECT id, table_name, discount_percentage, discount_amount, total
+            SELECT id, table_name, discount_percentage, discount_amount, total, discount_by
             FROM orders
             WHERE status = 'Paid' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = $1 AND discount_amount > 0
             ORDER BY created_at DESC;
