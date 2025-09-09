@@ -765,9 +765,11 @@ app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => {
     }
 });
 
+// แก้ไขฟังก์ชัน app.get('/api/users', ...)
 app.get('/api/users', authenticateToken('admin'), async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, username, role FROM users ORDER BY username');
+        // เพิ่ม full_name เข้าไปใน SELECT
+        const result = await pool.query('SELECT id, username, role, full_name FROM users ORDER BY username');
         res.json({ status: 'success', data: result.rows });
     } catch (error) {
         console.error('Error fetching users:', error);
@@ -775,16 +777,17 @@ app.get('/api/users', authenticateToken('admin'), async (req, res) => {
     }
 });
 
+// แก้ไขฟังก์ชัน app.post('/api/users', ...)
 app.post('/api/users', authenticateToken('admin'), async (req, res) => {
     try {
-        const { username, password, role } = req.body;
+        const { username, password, role, full_name } = req.body; // รับ full_name
         if (!username || !password || !role) {
             return res.status(400).json({ status: 'error', message: 'Username, password, and role are required.' });
         }
         const password_hash = await bcrypt.hash(password, SALT_ROUNDS); 
         const result = await pool.query(
-            'INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role',
-            [username, password_hash, role]
+            'INSERT INTO users (username, password_hash, role, full_name) VALUES ($1, $2, $3, $4) RETURNING id, username, role, full_name',
+            [username, password_hash, role, full_name] // เพิ่ม full_name
         );
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -796,17 +799,24 @@ app.post('/api/users', authenticateToken('admin'), async (req, res) => {
     }
 });
 
+// แก้ไขฟังก์ชัน app.put('/api/users/:id', ...)
 app.put('/api/users/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        const { role, password } = req.body;
-        
+        const { role, password, full_name } = req.body; // รับ full_name
+
+        let query = 'UPDATE users SET role = $1, full_name = $2';
+        const queryParams = [role, full_name, id];
+
         if (password && password.trim() !== '') {
             const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
-            await pool.query('UPDATE users SET role = $1, password_hash = $2 WHERE id = $3', [role, password_hash, id]);
+            query += ', password_hash = $4 WHERE id = $5';
+            queryParams.splice(2, 0, password_hash); // แทรก password_hash เข้าไป
         } else {
-            await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
+            query += ' WHERE id = $3';
         }
+
+        await pool.query(query, queryParams);
         res.json({ status: 'success', message: 'User updated successfully.' });
     } catch (error) {
         console.error('Error updating user:', error);
