@@ -1193,6 +1193,51 @@ app.get('/api/categories-by-station', authenticateToken('kitchen', 'bar', 'admin
     }
 });
 
+app.get('/api/stock-items', authenticateToken('admin'), async (req, res) => {
+    try {
+        const query = `
+            SELECT id, name_th, current_stock 
+            FROM menu_items 
+            WHERE manage_stock = true 
+            ORDER BY name_th ASC;
+        `;
+        const result = await pool.query(query);
+        res.json({ status: 'success', data: result.rows });
+    } catch (error) {
+        console.error('Failed to fetch stock items:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch stock items.' });
+    }
+});
+
+app.put('/api/update-item-stock/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { current_stock } = req.body;
+
+        if (current_stock === undefined || isNaN(parseInt(current_stock))) {
+            return res.status(400).json({ status: 'error', message: 'Current stock must be a valid number.' });
+        }
+
+        const newStock = parseInt(current_stock, 10);
+        const newStatus = newStock > 0 ? 'in_stock' : 'out_of_stock';
+
+        const result = await pool.query(
+            'UPDATE menu_items SET current_stock = $1, stock_status = $2 WHERE id = $3 RETURNING id, name_th, current_stock, stock_status',
+            [newStock, newStatus, id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Menu item not found.' });
+        }
+
+        res.json({ status: 'success', data: result.rows[0] });
+
+    } catch (error) {
+        console.error('Failed to update item stock:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to update item stock.' });
+    }
+});
+
 app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
     try {
         const timeZone = 'Asia/Bangkok';
