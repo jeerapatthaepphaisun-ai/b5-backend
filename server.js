@@ -350,7 +350,8 @@ app.post('/api/orders', async (req, res) => {
             calculatedSubtotal += basePrice * item.quantity;
             
             processedCartForDb.push({
-                unique_id: item.uniqueId,
+                id: item.id,
+                uniqueId: item.uniqueId,
                 name_th: item.name_th,
                 name_en: item.name_en,
                 category_th: item.category_th,
@@ -529,12 +530,12 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
         const baseExpandedItemsCTE = `
             WITH expanded_items AS (
                 SELECT 
-                    substring(item.id from 1 for 36)::uuid as cleaned_id,
-                    item.price,
-                    item.quantity
+                    item ->> 'id' as cleaned_id,
+                    (item ->> 'price')::numeric as price,
+                    (item ->> 'quantity')::int as quantity
                 FROM 
                     orders,
-                    jsonb_to_recordset(orders.items) as item(id text, price numeric, quantity int)
+                    jsonb_array_elements(orders.items) as item
                 WHERE 
                     orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
             )
@@ -546,7 +547,7 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
                 mi.name_th as name,
                 SUM(ei.quantity) as quantity
             FROM expanded_items ei
-            JOIN menu_items mi ON ei.cleaned_id = mi.id
+            JOIN menu_items mi ON ei.cleaned_id::uuid = mi.id
             JOIN categories c ON mi.category_id = c.id
             WHERE c.station_type = $3
             GROUP BY mi.name_th ORDER BY quantity DESC LIMIT 5;
@@ -558,7 +559,7 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res) => {
                 c.name_th as category_name,
                 SUM(ei.price * ei.quantity) as total_sales
             FROM expanded_items ei
-            JOIN menu_items mi ON ei.cleaned_id = mi.id
+            JOIN menu_items mi ON ei.cleaned_id::uuid = mi.id
             JOIN categories c ON mi.category_id = c.id
             WHERE c.station_type = $3
             GROUP BY c.name_th ORDER BY total_sales DESC;
@@ -664,7 +665,7 @@ app.delete('/api/categories/:id', authenticateToken('admin'), async (req, res) =
 
 app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
     try {
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
         if (!name_th || !price || !category_id) return res.status(400).json({ status: 'error', message: 'Missing required fields' });
         
         let isRecommendedStatus = false;
@@ -676,10 +677,10 @@ app.post('/api/menu-items', authenticateToken('admin'), async (req, res) => {
         }
         
         const query = `
-            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, is_recommended, current_stock)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, is_recommended, current_stock, manage_stock)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0, isRecommendedStatus, current_stock || 0];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0, isRecommendedStatus, current_stock || 0, manage_stock || false];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -702,19 +703,15 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-// แก้ไขฟังก์ชัน app.put('/api/menu-items/:id', ...) ทั้งหมด
 app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
         
-        // --- START: เพิ่ม Logic อัตโนมัติ ---
         let finalStockStatus = stock_status;
-        // ถ้ามีการเติมสต็อก (current_stock > 0) ให้เปลี่ยนสถานะกลับเป็น 'in_stock' โดยอัตโนมัติ
         if (current_stock > 0) {
             finalStockStatus = 'in_stock';
         }
-        // --- END: เพิ่ม Logic อัตโนมัติ ---
 
         let isRecommendedStatus = false;
         if (category_id) {
@@ -726,11 +723,10 @@ app.put('/api/menu-items/:id', authenticateToken('admin'), async (req, res) => {
         
         const query = `
             UPDATE menu_items 
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9, is_recommended = $10, current_stock = $11
-            WHERE id = $12 RETURNING *;
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9, is_recommended = $10, current_stock = $11, manage_stock = $12
+            WHERE id = $13 RETURNING *;
         `;
-        // ใช้ finalStockStatus แทน stock_status เดิม
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, finalStockStatus, discount_percentage, isRecommendedStatus, current_stock, id];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, finalStockStatus, discount_percentage, isRecommendedStatus, current_stock, manage_stock, id];
         const result = await pool.query(query, values);
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -1124,6 +1120,27 @@ app.post('/api/tables', authenticateToken('admin'), async (req, res) => {
     } catch (error) {
         console.error('Error creating table:', error);
         res.status(500).json({ status: 'error', message: 'Failed to create table.' });
+    }
+});
+
+app.put('/api/tables/:id', authenticateToken('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, sort_order } = req.body;
+        if (!name) {
+            return res.status(400).json({ status: 'error', message: 'Table name is required.' });
+        }
+        const result = await pool.query(
+            'UPDATE tables SET name = $1, sort_order = $2 WHERE id = $3 RETURNING *',
+            [name, sort_order || 99, id]
+        );
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Table not found.' });
+        }
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        console.error('Error updating table:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to update table.' });
     }
 });
 
