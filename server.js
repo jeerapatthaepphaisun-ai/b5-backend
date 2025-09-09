@@ -83,6 +83,22 @@ function authenticateToken(...allowedRoles) {
     }
 }
 
+function decodeTokenOptional(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (token == null) {
+        return next();
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (!err) {
+            req.user = user;
+        }
+        next();
+    });
+}
+
 // =================================================================
 // --- API Endpoints ---
 // =================================================================
@@ -286,20 +302,27 @@ app.get('/api/cafe-menu', async (req, res) => {
     }
 });
 
-app.post('/api/orders', authenticateToken('bar', 'admin'), async (req, res) => {
+app.post('/api/orders', decodeTokenOptional, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query("SET TimeZone = 'Asia/Bangkok';");
-    
-        const { cart, specialRequest, orderSource, discountPercentage = 0 } = req.body; 
+
+        const { cart, specialRequest, orderSource, discountPercentage = 0 } = req.body;
         
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
         }
 
-        let finalTableName;
+        let discountedByUser = null;
+        if (discountPercentage > 0) {
+            if (!req.user) {
+                return res.status(401).send('Unauthorized: A login is required to apply discounts.');
+            }
+            discountedByUser = req.user.username;
+        }
 
+        let finalTableName;
         if (orderSource === 'bar') {
             const lastTakeawayQuery = `
                 SELECT table_name FROM orders 
@@ -316,21 +339,10 @@ app.post('/api/orders', authenticateToken('bar', 'admin'), async (req, res) => {
                 nextNumber = lastNumber + 1;
             }
             finalTableName = `Takeaway-${nextNumber}`;
-        } else if (req.body.isTakeaway && !req.body.tableNumber) {
-            finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`;
-        } else if (req.body.tableNumber) {
-            finalTableName = req.body.tableNumber;
-            const tableStatusResult = await client.query('SELECT status FROM tables WHERE name = $1', [finalTableName]);
-            if (tableStatusResult.rowCount === 0) {
-                return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
-            }
-            if (tableStatusResult.rows[0].status === 'Available') {
-                await client.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', finalTableName]);
-            }
         } else {
-            return res.status(400).json({ status: 'error', message: 'Table number or valid source is required.' });
+            finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`;
         }
-
+        
         let calculatedSubtotal = 0;
         const processedCartForDb = [];
 
@@ -374,8 +386,7 @@ app.post('/api/orders', authenticateToken('bar', 'admin'), async (req, res) => {
         const subtotal = calculatedSubtotal;
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
-        const finalStatus = orderSource === 'bar' ? 'Paid' : 'Pending';
-        const discountedByUser = req.user.username;
+        const finalStatus = (orderSource === 'bar' && req.user) ? 'Paid' : 'Pending';
         
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by)
@@ -390,8 +401,8 @@ app.post('/api/orders', authenticateToken('bar', 'admin'), async (req, res) => {
             finalTotal, 
             specialRequest || '',
             finalStatus,
-            req.body.isTakeaway || orderSource === 'bar',
-            discountPercentage > 0 ? discountedByUser : null
+            true,
+            discountedByUser
         ];
         const result = await client.query(query, values);
         
@@ -765,10 +776,8 @@ app.post('/api/update-stock', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-// แก้ไขฟังก์ชัน app.get('/api/users', ...)
 app.get('/api/users', authenticateToken('admin'), async (req, res) => {
     try {
-        // เพิ่ม full_name เข้าไปใน SELECT
         const result = await pool.query('SELECT id, username, role, full_name FROM users ORDER BY username');
         res.json({ status: 'success', data: result.rows });
     } catch (error) {
@@ -777,17 +786,16 @@ app.get('/api/users', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-// แก้ไขฟังก์ชัน app.post('/api/users', ...)
 app.post('/api/users', authenticateToken('admin'), async (req, res) => {
     try {
-        const { username, password, role, full_name } = req.body; // รับ full_name
+        const { username, password, role, full_name } = req.body;
         if (!username || !password || !role) {
             return res.status(400).json({ status: 'error', message: 'Username, password, and role are required.' });
         }
         const password_hash = await bcrypt.hash(password, SALT_ROUNDS); 
         const result = await pool.query(
             'INSERT INTO users (username, password_hash, role, full_name) VALUES ($1, $2, $3, $4) RETURNING id, username, role, full_name',
-            [username, password_hash, role, full_name] // เพิ่ม full_name
+            [username, password_hash, role, full_name]
         );
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -799,23 +807,22 @@ app.post('/api/users', authenticateToken('admin'), async (req, res) => {
     }
 });
 
-// แก้ไขฟังก์ชัน app.put('/api/users/:id', ...)
 app.put('/api/users/:id', authenticateToken('admin'), async (req, res) => {
     try {
         const { id } = req.params;
-        const { role, password, full_name } = req.body; // รับ full_name
-
+        const { role, password, full_name } = req.body;
+        
         let query = 'UPDATE users SET role = $1, full_name = $2';
         const queryParams = [role, full_name, id];
 
         if (password && password.trim() !== '') {
             const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
             query += ', password_hash = $4 WHERE id = $5';
-            queryParams.splice(2, 0, password_hash); // แทรก password_hash เข้าไป
+            queryParams.splice(2, 0, password_hash);
         } else {
             query += ' WHERE id = $3';
         }
-
+        
         await pool.query(query, queryParams);
         res.json({ status: 'success', message: 'User updated successfully.' });
     } catch (error) {
