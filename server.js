@@ -1010,27 +1010,31 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), async (re
         if (!tableName || discountPercentage === undefined) {
             return res.status(400).json({ status: 'error', message: 'Table name and discount percentage are required.' });
         }
-    
+
         const ordersResult = await pool.query(
             "SELECT id, subtotal FROM orders WHERE table_name = $1 AND status != 'Paid'", 
             [tableName]
         );
-    
+
         if (ordersResult.rowCount === 0) {
             return res.status(404).json({ status: 'error', message: 'No active orders found for this table.' });
         }
-    
+
+        // ดึงชื่อผู้ใช้จาก token ที่ login เข้ามา
+        const discountedByUser = req.user.username;
+
         for (const order of ordersResult.rows) {
             const subtotal = parseFloat(order.subtotal);
             const discountAmount = subtotal * (discountPercentage / 100);
             const newTotal = subtotal - discountAmount;
-    
+
+            // เพิ่มการอัปเดตคอลัมน์ discount_by
             await pool.query(
-                'UPDATE orders SET discount_percentage = $1, discount_amount = $2, total = $3 WHERE id = $4',
-                [discountPercentage, discountAmount, newTotal, order.id]
+                'UPDATE orders SET discount_percentage = $1, discount_amount = $2, total = $3, discount_by = $4 WHERE id = $5',
+                [discountPercentage, discountAmount, newTotal, discountedByUser, order.id]
             );
         }
-    
+
         res.json({ status: 'success', message: `Discount of ${discountPercentage}% applied to table ${tableName}.` });
     } catch (error) {
         console.error('Error applying discount:', error);
