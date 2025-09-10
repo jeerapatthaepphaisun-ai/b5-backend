@@ -12,7 +12,7 @@ const { formatInTimeZone } = require('date-fns-tz');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
 const WebSocket = require('ws');
-const rateLimit = require('express-rate-limit'); // <-- เพิ่มเข้ามา
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const server = http.createServer(app);
@@ -65,8 +65,8 @@ const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // หน้าต่างเวลา 15 นาที
     max: 10, // อนุญาตให้เรียกได้สูงสุด 10 ครั้งใน 15 นาที
     message: 'คุณพยายามล็อกอินมากเกินไป กรุณาลองใหม่อีกครั้งใน 15 นาที',
-    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    standardHeaders: true, 
+    legacyHeaders: false, 
 });
 
 function authenticateToken(...allowedRoles) {
@@ -115,7 +115,7 @@ function decodeTokenOptional(req, res, next) {
 
 app.get('/', (req, res) => res.status(200).send('Tonnam Cafe Backend is running with Supabase!'));
 
-app.post('/api/login', loginLimiter, async (req, res) => { // <-- เพิ่ม loginLimiter
+app.post('/api/login', loginLimiter, async (req, res) => {
     try {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
@@ -164,7 +164,7 @@ app.get('/api/all-tables', async (req, res) => {
 
 app.get('/api/menu', async (req, res) => {
     try {
-        const { category, search, page = 1, limit = 20 } = req.query;
+        const { category, search, page = 1, limit = 1000 } = req.query;
 
         let baseQuery = `
             FROM menu_items mi
@@ -318,7 +318,8 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
         await client.query('BEGIN');
         await client.query("SET TimeZone = 'Asia/Bangkok';");
 
-        const { cart, tableNumber, specialRequest, isTakeaway, orderSource, discountPercentage = 0 } = req.body; 
+        // รับค่า orderSource จาก Frontend เพื่อแยกว่าออเดอร์มาจากไหน
+        const { cart, tableNumber, specialRequest, isTakeaway, orderSource, discountPercentage = 0 } = req.body;
 
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
@@ -332,14 +333,31 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
             discountedByUser = req.user.username;
         }
 
+        // --- START: ปรับปรุง Logic การตั้งชื่อออเดอร์ ---
         let finalTableName;
+
         if (orderSource === 'bar') {
+            // Logic สำหรับออเดอร์จาก Bar POS
+            const lastBarOrderQuery = `
+                SELECT table_name FROM orders 
+                WHERE table_name LIKE 'Bar-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE 
+                ORDER BY created_at DESC LIMIT 1;`;
+            const lastBarResult = await client.query(lastBarOrderQuery);
+
+            let nextNumber = 1;
+            if (lastBarResult.rows.length > 0) {
+                const lastBarName = lastBarResult.rows[0].table_name;
+                const lastNumber = parseInt(lastBarName.split('-')[1] || '0', 10);
+                nextNumber = lastNumber + 1;
+            }
+            finalTableName = `Bar-${nextNumber}`;
+
+        } else if (isTakeaway) {
+            // Logic สำหรับออเดอร์ Takeaway (ส่วนใหญ่จะมาจากฝั่งลูกค้า)
             const lastTakeawayQuery = `
                 SELECT table_name FROM orders 
-                WHERE table_name LIKE 'Takeaway-%' 
-                AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE 
-                ORDER BY created_at DESC 
-                LIMIT 1;`;
+                WHERE table_name LIKE 'Takeaway-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE 
+                ORDER BY created_at DESC LIMIT 1;`;
             const lastTakeawayResult = await client.query(lastTakeawayQuery);
 
             let nextNumber = 1;
@@ -349,9 +367,9 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
                 nextNumber = lastNumber + 1;
             }
             finalTableName = `Takeaway-${nextNumber}`;
-        } else if (isTakeaway && !tableNumber) { 
-            finalTableName = `Takeaway-${Math.floor(1000 + Math.random() * 9000)}`;
+
         } else if (tableNumber) {
+            // Logic สำหรับลูกค้าสั่งทานที่โต๊ะ
             finalTableName = tableNumber;
             const tableStatusResult = await client.query('SELECT status FROM tables WHERE name = $1', [finalTableName]);
             if (tableStatusResult.rowCount === 0) {
@@ -361,14 +379,15 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
                 await client.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', finalTableName]);
             }
         } else {
-             return res.status(400).json({ status: 'error', message: 'Table number or valid source is required.' });
+             return res.status(400).json({ status: 'error', message: 'Table number or order type is required.' });
         }
+        // --- END: ปรับปรุง Logic การตั้งชื่อออเดอร์ ---
 
         let calculatedSubtotal = 0;
         const processedCartForDb = [];
 
         for (const item of cart) {
-            const itemResult = await client.query('SELECT price, discount_percentage, stock_status, name_th FROM menu_items WHERE id = $1', [item.id]);
+            const itemResult = await client.query('SELECT price, stock_status, name_th FROM menu_items WHERE id = $1', [item.productId || item.id]);
 
             if (itemResult.rows.length === 0) {
                 throw new Error(`Item with ID ${item.id} not found.`);
@@ -377,27 +396,14 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
                 throw new Error(`Item "${itemResult.rows[0].name_th}" is out of stock.`);
             }
 
-            const dbItem = itemResult.rows[0];
-            const basePrice = parseFloat(dbItem.price);
-
+            const basePrice = parseFloat(item.price);
             calculatedSubtotal += basePrice * item.quantity;
+            processedCartForDb.push(item);
 
-            processedCartForDb.push({
-                id: item.id,
-                uniqueId: item.uniqueId,
-                name_th: item.name_th,
-                name_en: item.name_en,
-                category_th: item.category_th,
-                quantity: item.quantity,
-                price: basePrice,
-                selected_options_text_th: item.selected_options_text_th,
-                selected_options_text_en: item.selected_options_text_en,
-            });
-
-            if (item.id) {
+            if (item.productId || item.id) {
                 await client.query(
                     `UPDATE menu_items SET current_stock = GREATEST(0, current_stock - $1) WHERE id = $2 AND manage_stock = true`, 
-                    [item.quantity, item.id]
+                    [item.quantity, item.productId || item.id]
                 );
             }
         }
@@ -407,7 +413,9 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
         const subtotal = calculatedSubtotal;
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
-        const finalStatus = (orderSource === 'bar' && req.user) ? 'Paid' : 'Pending';
+        
+        // กำหนดให้สถานะเริ่มต้นเป็น "Pending" เสมอ เพื่อให้ KDS รับออเดอร์ไปทำ
+        const finalStatus = 'Pending';
 
         const query = `
             INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by)
@@ -428,16 +436,8 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
         const result = await client.query(query, values);
 
         await client.query('COMMIT');
-
         const newOrder = result.rows[0];
-
-        if (newOrder.status !== 'Paid') {
-            broadcast({
-                type: 'newOrder',
-                order: newOrder
-            });
-        }
-
+        broadcast({ type: 'newOrder', order: newOrder });
         res.status(201).json({ status: 'success', data: newOrder });
 
     } catch (error) {
@@ -1094,7 +1094,7 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
                     ) ORDER BY created_at
                 ) as orders_data
             FROM orders
-            WHERE table_name LIKE 'Takeaway-%' AND status != 'Paid'
+            WHERE (table_name LIKE 'Takeaway-%' OR table_name LIKE 'Bar-%') AND status != 'Paid'
             GROUP BY table_name
             ORDER BY table_name;
         `;
@@ -1380,3 +1380,10 @@ app.get('/api/next-bar-number', authenticateToken('bar', 'admin', 'cashier'), as
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Tonnam Cafe Backend is running on port ${PORT}`);
 });
+}
+ตอนนี้ผมมี 3 Frontend ที่ใช้งานอยู่คือ
+1. Bar pos
+2. KDS
+3. Customer menu
+
+ช่วยตรวจสอบโค้ดทั้งหมดแล้วแก้ไขให้ถูกต้อง และใช้ร่วมกันได้ให้หน่อยครับ
