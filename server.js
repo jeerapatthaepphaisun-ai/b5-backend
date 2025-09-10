@@ -352,8 +352,20 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
             }
             finalTableName = `Bar-${nextNumber}`;
 
+        } else if (tableNumber) {
+            // **NEW LOGIC**: ลูกค้าที่โต๊ะสั่งอาหาร (ทั้งทานที่ร้านและกลับบ้าน)
+            finalTableName = tableNumber;
+            const tableStatusResult = await client.query('SELECT status FROM tables WHERE name = $1', [finalTableName]);
+            if (tableStatusResult.rowCount === 0) {
+                return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
+            }
+            // อัปเดตสถานะโต๊ะเป็น "Occupied" เฉพาะเมื่อเป็นการสั่ง "ทานที่ร้าน" ครั้งแรกเท่านั้น
+            if (tableStatusResult.rows[0].status === 'Available' && !isTakeaway) {
+                await client.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', finalTableName]);
+            }
+
         } else if (isTakeaway) {
-            // Logic สำหรับออเดอร์ Takeaway (ส่วนใหญ่จะมาจากฝั่งลูกค้า)
+            // **NEW LOGIC**: ลูกค้า Walk-in สั่งกลับบ้าน (ไม่มีหมายเลขโต๊ะ)
             const lastTakeawayQuery = `
                 SELECT table_name FROM orders 
                 WHERE table_name LIKE 'Takeaway-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE 
@@ -368,16 +380,6 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
             }
             finalTableName = `Takeaway-${nextNumber}`;
 
-        } else if (tableNumber) {
-            // Logic สำหรับลูกค้าสั่งทานที่โต๊ะ
-            finalTableName = tableNumber;
-            const tableStatusResult = await client.query('SELECT status FROM tables WHERE name = $1', [finalTableName]);
-            if (tableStatusResult.rowCount === 0) {
-                return res.status(404).json({ status: 'error', message: 'ไม่พบโต๊ะที่ระบุ' });
-            }
-            if (tableStatusResult.rows[0].status === 'Available') {
-                await client.query('UPDATE tables SET status = $1 WHERE name = $2', ['Occupied', finalTableName]);
-            }
         } else {
              return res.status(400).json({ status: 'error', message: 'Table number or order type is required.' });
         }
@@ -1098,7 +1100,7 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
                     ) ORDER BY created_at
                 ) as orders_data
             FROM orders
-            WHERE (table_name LIKE 'Takeaway-%' OR table_name LIKE 'Bar-%') AND status != 'Paid'
+            WHERE table_name LIKE 'Takeaway-%' AND status != 'Paid'
             GROUP BY table_name
             ORDER BY table_name;
         `;
