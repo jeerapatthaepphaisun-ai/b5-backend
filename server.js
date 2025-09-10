@@ -67,8 +67,8 @@ const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
     message: 'คุณพยายามล็อกอินมากเกินไป กรุณาลองใหม่อีกครั้งใน 15 นาที',
-    standardHeaders: true, 
-    legacyHeaders: false, 
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 
 // ✨ STEP 2: เพิ่ม Rate Limiter สำหรับ API ทั่วไป
@@ -88,7 +88,7 @@ function authenticateToken(...allowedRoles) {
         if (token == null) return res.sendStatus(401);
 
         jwt.verify(token, JWT_SECRET, (err, user) => {
-            if (err) return res.sendStatus(403); 
+            if (err) return res.sendStatus(403);
 
             if (user.role === 'admin') {
                 req.user = user;
@@ -132,7 +132,7 @@ app.post('/api/login', loginLimiter, async (req, res, next) => {
     try {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
-        
+
         const result = await pool.query('SELECT * FROM users WHERE LOWER(username) = LOWER($1)', [username]);
         const user = result.rows[0];
 
@@ -204,14 +204,14 @@ app.get('/api/menu', async (req, res, next) => {
         const offset = (page - 1) * limit;
         queryParams.push(limit);
         queryParams.push(offset);
-        
+
         const menuQuery = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             ${baseQuery}
             ORDER BY c.sort_order ASC, mi.is_recommended DESC, mi.name_th ASC
             LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length};
         `;
-        
+
         const menuResult = await pool.query(menuQuery, queryParams);
         let menuItems = menuResult.rows;
 
@@ -230,7 +230,7 @@ app.get('/api/menu', async (req, res, next) => {
                 map[row.menu_item_id].push(row.option_set_id);
                 return map;
             }, {});
-            
+
             menuItems = menuItems.map(item => {
                 const optionSetIds = menuOptionsLink[item.id] || [];
                 item.option_groups = optionSetIds.reduce((groups, id) => {
@@ -240,7 +240,7 @@ app.get('/api/menu', async (req, res, next) => {
                 return item;
             });
         }
-        
+
         res.json({
             status: 'success',
             data: {
@@ -280,7 +280,7 @@ app.get('/api/cafe-menu', async (req, res, next) => {
             ORDER BY c.sort_order ASC, mi.is_recommended DESC, mi.name_th ASC;
         `;
         const result = await pool.query(query, queryParams);
-        
+
         let menuItems = result.rows;
         if (menuItems.length > 0) {
             const optionsResult = await pool.query('SELECT * FROM menu_options;');
@@ -297,7 +297,7 @@ app.get('/api/cafe-menu', async (req, res, next) => {
                 map[row.menu_item_id].push(row.option_set_id);
                 return map;
             }, {});
-            
+
             menuItems = menuItems.map(item => {
                 const optionSetIds = menuOptionsLink[item.id] || [];
                 item.option_groups = optionSetIds.reduce((groups, id) => {
@@ -325,7 +325,7 @@ app.post('/api/orders', decodeTokenOptional, async (req, res, next) => {
     try {
         await client.query('BEGIN');
         await client.query("SET TimeZone = 'Asia/Bangkok';");
-        
+
         const { cart, tableNumber, specialRequest, isTakeaway, orderSource, discountPercentage = 0 } = req.body;
 
         if (!cart || cart.length === 0) {
@@ -343,8 +343,8 @@ app.post('/api/orders', decodeTokenOptional, async (req, res, next) => {
         let finalTableName;
         if (orderSource === 'bar') {
             const lastBarOrderQuery = `
-                SELECT table_name FROM orders 
-                WHERE table_name LIKE 'Bar-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE 
+                SELECT table_name FROM orders
+                WHERE table_name LIKE 'Bar-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE
                 ORDER BY created_at DESC LIMIT 1;`;
             const lastBarResult = await client.query(lastBarOrderQuery);
             let nextNumber = 1;
@@ -365,8 +365,8 @@ app.post('/api/orders', decodeTokenOptional, async (req, res, next) => {
             }
         } else if (isTakeaway) {
             const lastTakeawayQuery = `
-                SELECT table_name FROM orders 
-                WHERE table_name LIKE 'Takeaway-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE 
+                SELECT table_name FROM orders
+                WHERE table_name LIKE 'Takeaway-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE
                 ORDER BY created_at DESC LIMIT 1;`;
             const lastTakeawayResult = await client.query(lastTakeawayQuery);
             let nextNumber = 1;
@@ -386,14 +386,14 @@ app.post('/api/orders', decodeTokenOptional, async (req, res, next) => {
             const itemResult = await client.query('SELECT price, stock_status, name_th FROM menu_items WHERE id = $1', [item.productId || item.id]);
             if (itemResult.rows.length === 0) throw new Error(`Item with ID ${item.id} not found.`);
             if (itemResult.rows[0].stock_status === 'out_of_stock') throw new Error(`Item "${itemResult.rows[0].name_th}" is out of stock.`);
-            
+
             const basePrice = parseFloat(item.price);
             calculatedSubtotal += basePrice * item.quantity;
             processedCartForDb.push(item);
 
             if (item.productId || item.id) {
                 await client.query(
-                    `UPDATE menu_items SET current_stock = GREATEST(0, current_stock - $1) WHERE id = $2 AND manage_stock = true`, 
+                    `UPDATE menu_items SET current_stock = GREATEST(0, current_stock - $1) WHERE id = $2 AND manage_stock = true`,
                     [item.quantity, item.productId || item.id]
                 );
             }
@@ -430,9 +430,9 @@ app.post('/api/request-bill', apiLimiter, async (req, res, next) => {
     try {
         const { tableName } = req.body;
         if (!tableName) return res.status(400).json({ status: 'error', message: 'ไม่พบชื่อโต๊ะ' });
-        
+
         await pool.query('UPDATE tables SET status = $1 WHERE name = $2', ['Billing', tableName]);
-        
+
         res.json({ status: 'success', message: 'เรียกเก็บเงินสำเร็จ' });
     } catch (error) {
         next(error);
@@ -443,8 +443,8 @@ app.get('/api/table-status/:tableName', async (req, res, next) => {
     try {
         const { tableName } = req.params;
         const query = `
-            SELECT 
-                status, 
+            SELECT
+                status,
                 json_agg(
                     json_build_object(
                         'items', items,
@@ -498,10 +498,10 @@ app.post('/api/upload-image', authenticateToken('admin'), apiLimiter, upload.sin
 // ✨ STEP 3: สร้าง API Endpoint ใหม่สำหรับแจ้งเตือนสต็อก
 app.get('/api/stock-alerts', authenticateToken('admin'), async (req, res, next) => {
     try {
-        const LOW_STOCK_THRESHOLD = 5; 
+        const LOW_STOCK_THRESHOLD = 5;
         const query = `
-            SELECT id, name_th, current_stock 
-            FROM menu_items 
+            SELECT id, name_th, current_stock
+            FROM menu_items
             WHERE manage_stock = true AND current_stock <= $1
             ORDER BY current_stock ASC;
         `;
@@ -520,7 +520,7 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res, next
         const { startDate = today, endDate = today } = req.query;
 
         const ordersQuery = `
-            SELECT *, created_at AT TIME ZONE 'Asia/Bangkok' as local_created_at FROM orders 
+            SELECT *, created_at AT TIME ZONE 'Asia/Bangkok' as local_created_at FROM orders
             WHERE status = 'Paid' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
         `;
         const ordersResult = await pool.query(ordersQuery, [startDate, endDate]);
@@ -537,23 +537,23 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res, next
             acc[date] = (acc[date] || 0) + parseFloat(order.total);
             return acc;
         }, {});
-        
+
         const salesByHour = Array(24).fill(0);
         paidOrders.forEach(order => {
             const hour = new Date(order.local_created_at).getHours();
             salesByHour[hour] += parseFloat(order.total);
         });
-        
+
         const baseExpandedItemsCTE = `
             WITH expanded_items AS (
-                SELECT 
+                SELECT
                     item ->> 'id' as cleaned_id,
                     (item ->> 'price')::numeric as price,
                     (item ->> 'quantity')::int as quantity
-                FROM 
+                FROM
                     orders,
                     jsonb_array_elements(orders.items) as item
-                WHERE 
+                WHERE
                     orders.status = 'Paid' AND (orders.created_at AT TIME ZONE 'Asia/Bangkok')::date BETWEEN $1 AND $2
             )
         `;
@@ -566,7 +566,7 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res, next
             pool.query(salesByCategoryQuery('kitchen'), [startDate, endDate, 'kitchen']),
             pool.query(salesByCategoryQuery('bar'), [startDate, endDate, 'bar'])
         ]);
-        
+
         const salesByKitchenCategory = salesByKitchenCategoryResult.rows.reduce((acc, row) => { acc[row.category_name] = parseFloat(row.total_sales); return acc; }, {});
         const salesByBarCategory = salesByBarCategoryResult.rows.reduce((acc, row) => { acc[row.category_name] = parseFloat(row.total_sales); return acc; }, {});
 
@@ -584,7 +584,7 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res, next
     }
 });
 
-app.post('/api/categories', authenticateToken('admin'), apiLimiter, 
+app.post('/api/categories', authenticateToken('admin'), apiLimiter,
     // ✨ STEP 6: เพิ่ม Validation Rules
     [
         body('name_th', 'กรุณาระบุชื่อหมวดหมู่ (ไทย)').notEmpty().trim(),
@@ -633,7 +633,7 @@ app.put('/api/categories/reorder', authenticateToken('admin'), apiLimiter, async
 });
 
 
-app.put('/api/categories/:id', authenticateToken('admin'), apiLimiter, 
+app.put('/api/categories/:id', authenticateToken('admin'), apiLimiter,
     [
         body('name_th', 'กรุณาระบุชื่อหมวดหมู่ (ไทย)').notEmpty().trim(),
         body('sort_order', 'กรุณาระบุลำดับเป็นตัวเลข').isNumeric(),
@@ -683,7 +683,7 @@ app.post('/api/menu-items', authenticateToken('admin'), apiLimiter,
         if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
-        
+
         let isRecommendedStatus = false;
         if (category_id) {
             const categoryResult = await pool.query('SELECT name_th FROM categories WHERE id = $1', [category_id]);
@@ -691,7 +691,7 @@ app.post('/api/menu-items', authenticateToken('admin'), apiLimiter,
                 isRecommendedStatus = true;
             }
         }
-        
+
         const query = `
             INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, is_recommended, current_stock, manage_stock)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *;
@@ -715,7 +715,7 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res, next
     }
 });
 
-app.put('/api/menu-items/:id', authenticateToken('admin'), apiLimiter, 
+app.put('/api/menu-items/:id', authenticateToken('admin'), apiLimiter,
     [
         body('name_th').notEmpty().withMessage('กรุณากรอกชื่อเมนู'),
         body('price').isFloat({ gt: 0 }).withMessage('ราคาต้องเป็นตัวเลขและมากกว่า 0'),
@@ -730,18 +730,18 @@ app.put('/api/menu-items/:id', authenticateToken('admin'), apiLimiter,
 
         const { id } = req.params;
         const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
-        
+
         let finalStockStatus = stock_status;
         if (manage_stock && current_stock > 0) finalStockStatus = 'in_stock';
-        
+
         let isRecommendedStatus = false;
         if (category_id) {
             const categoryResult = await pool.query('SELECT name_th FROM categories WHERE id = $1', [category_id]);
             if (categoryResult.rows.length > 0 && categoryResult.rows[0].name_th === 'เมนูแนะนำ') isRecommendedStatus = true;
         }
-        
+
         const query = `
-            UPDATE menu_items 
+            UPDATE menu_items
             SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9, is_recommended = $10, current_stock = $11, manage_stock = $12
             WHERE id = $13 RETURNING *;
         `;
@@ -786,7 +786,7 @@ app.get('/api/users', authenticateToken('admin'), async (req, res, next) => {
     }
 });
 
-app.post('/api/users', authenticateToken('admin'), apiLimiter, 
+app.post('/api/users', authenticateToken('admin'), apiLimiter,
     [
         body('username').notEmpty().withMessage('Username is required'),
         body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
@@ -796,9 +796,9 @@ app.post('/api/users', authenticateToken('admin'), apiLimiter,
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-        
+
         const { username, password, role, full_name } = req.body;
-        const password_hash = await bcrypt.hash(password, SALT_ROUNDS); 
+        const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
         const result = await pool.query(
             'INSERT INTO users (username, password_hash, role, full_name) VALUES ($1, $2, $3, $4) RETURNING id, username, role, full_name',
             [username, password_hash, role, full_name]
@@ -809,7 +809,7 @@ app.post('/api/users', authenticateToken('admin'), apiLimiter,
     }
 });
 
-app.put('/api/users/:id', authenticateToken('admin'), apiLimiter, 
+app.put('/api/users/:id', authenticateToken('admin'), apiLimiter,
     [
         body('role').isIn(['admin', 'cashier', 'kitchen', 'bar']).withMessage('Invalid role specified'),
         body('password').optional({ checkFalsy: true }).isLength({ min: 6 }).withMessage('Password must be at least 6 characters long')
@@ -821,7 +821,7 @@ app.put('/api/users/:id', authenticateToken('admin'), apiLimiter,
 
         const { id } = req.params;
         const { role, password, full_name } = req.body;
-        
+
         let query = 'UPDATE users SET role = $1, full_name = $2';
         const queryParams = [role, full_name, id];
 
@@ -833,7 +833,7 @@ app.put('/api/users/:id', authenticateToken('admin'), apiLimiter,
         } else {
             query += ' WHERE id = $3 RETURNING id';
         }
-        
+
         await pool.query(query, queryParams);
         res.json({ status: 'success', message: 'User updated successfully.' });
     } catch (error) {
@@ -854,7 +854,7 @@ app.delete('/api/users/:id', authenticateToken('admin'), apiLimiter, async (req,
 
 app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (req, res, next) => {
     try {
-        const { station } = req.query; 
+        const { station } = req.query;
         if (!station) {
             return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station (kitchen หรือ bar)' });
         }
@@ -863,11 +863,11 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (
         const targetCategories = categoriesResult.rows.map(row => row.name_th);
 
         if (targetCategories.length === 0) {
-            return res.json({ status: 'success', data: [] }); 
+            return res.json({ status: 'success', data: [] });
         }
 
         const query = `
-            SELECT * FROM orders 
+            SELECT * FROM orders
             WHERE status IN ('Pending', 'Cooking', 'Preparing')
             ORDER BY created_at ASC;
         `;
@@ -875,7 +875,7 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (
         let orders = result.rows;
 
         const filteredOrders = orders.map(order => {
-            const relevantItems = order.items.filter(item => 
+            const relevantItems = order.items.filter(item =>
                 targetCategories.includes(item.category_th)
             );
 
@@ -883,7 +883,7 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (
                 return { ...order, items: relevantItems };
             }
             return null;
-        }).filter(Boolean); 
+        }).filter(Boolean);
 
         res.json({ status: 'success', data: filteredOrders });
 
@@ -895,28 +895,28 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (
 app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), apiLimiter, async (req, res, next) => {
     const client = await pool.connect();
     try {
-        await client.query('BEGIN'); 
+        await client.query('BEGIN');
 
         const { orderId, newStatus, station } = req.body;
 
         if (newStatus !== 'Serving') {
             const result = await client.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
-            await client.query('COMMIT'); 
+            await client.query('COMMIT');
             if (result.rowCount === 0) {
                 return res.status(404).json({ status: 'error', message: 'Order not found' });
             }
             broadcast({ type: 'orderStatusUpdate', order: result.rows[0] });
             return res.json({ status: 'success', data: result.rows[0] });
         }
-        
+
         const updateStationResult = await client.query(
-            `UPDATE orders 
-             SET completed_stations = completed_stations || $1::jsonb 
-             WHERE id = $2 AND NOT completed_stations @> $1::jsonb 
+            `UPDATE orders
+             SET completed_stations = completed_stations || $1::jsonb
+             WHERE id = $2 AND NOT completed_stations @> $1::jsonb
              RETURNING *`,
             [JSON.stringify(station), orderId]
         );
-        
+
         if (updateStationResult.rowCount === 0) {
              const currentOrder = await client.query('SELECT * FROM orders WHERE id = $1', [orderId]);
              if(currentOrder.rowCount === 0) throw new Error('Order not found');
@@ -927,14 +927,14 @@ app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), api
         const updatedOrder = updateStationResult.rows[0];
         const orderItems = updatedOrder.items;
         const itemCategories = orderItems.map(item => item.category_th);
-        
+
         const categoriesResult = await client.query(
             'SELECT DISTINCT station_type FROM categories WHERE name_th = ANY($1::text[])',
             [itemCategories]
         );
         const requiredStations = categoriesResult.rows.map(row => row.station_type);
 
-        const allStationsCompleted = requiredStations.every(reqStation => 
+        const allStationsCompleted = requiredStations.every(reqStation =>
             updatedOrder.completed_stations.includes(reqStation)
         );
 
@@ -943,12 +943,12 @@ app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), api
                 'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
                 ['Serving', orderId]
             );
-            await client.query('COMMIT'); 
+            await client.query('COMMIT');
             broadcast({ type: 'orderStatusUpdate', order: finalResult.rows[0] });
             return res.json({ status: 'success', data: finalResult.rows[0] });
         }
 
-        await client.query('COMMIT'); 
+        await client.query('COMMIT');
         broadcast({ type: 'orderStatusUpdate', order: updatedOrder });
         res.json({ status: 'success', data: updatedOrder });
 
@@ -956,18 +956,18 @@ app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), api
         await client.query('ROLLBACK');
         next(error);
     } finally {
-        client.release(); 
+        client.release();
     }
 });
 
 app.get('/api/tables', authenticateToken('cashier', 'admin'), async (req, res, next) => {
     try {
         const query = `
-            SELECT 
+            SELECT
                 t.name as table_name,
                 t.status as table_status,
                 o.orders_data
-            FROM 
+            FROM
                 tables t
             LEFT JOIN (
                 SELECT
@@ -994,7 +994,7 @@ app.get('/api/tables', authenticateToken('cashier', 'admin'), async (req, res, n
                 const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
                 const total = row.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
                 const discountPercentage = row.orders_data[0]?.discount_percentage || 0;
-                
+
                 acc[row.table_name] = {
                     tableName: row.table_name,
                     orders: row.orders_data.flatMap(order => order.items),
@@ -1007,7 +1007,7 @@ app.get('/api/tables', authenticateToken('cashier', 'admin'), async (req, res, n
             }
             return acc;
         }, {});
-        
+
         res.json({ status: 'success', data: { allTables: allTableNames, occupiedTables: occupiedTablesData } });
 
     } catch (error) {
@@ -1020,7 +1020,7 @@ app.post('/api/clear-table', authenticateToken('cashier', 'admin'), apiLimiter, 
         const { tableName } = req.body;
         await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
         await pool.query("UPDATE tables SET status = 'Available' WHERE name = $1", [tableName]);
-        
+
         broadcast({ type: 'tableCleared', tableName });
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
     } catch (error) {
@@ -1034,29 +1034,29 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), apiLimite
         if (!tableName || discountPercentage === undefined) {
             return res.status(400).json({ status: 'error', message: 'Table name and discount percentage are required.' });
         }
-    
+
         const ordersResult = await pool.query(
-            "SELECT id, subtotal FROM orders WHERE table_name = $1 AND status != 'Paid'", 
+            "SELECT id, subtotal FROM orders WHERE table_name = $1 AND status != 'Paid'",
             [tableName]
         );
-    
+
         if (ordersResult.rowCount === 0) {
             return res.status(404).json({ status: 'error', message: 'No active orders found for this table.' });
         }
-    
+
         const discountedByUser = req.user.username;
 
         for (const order of ordersResult.rows) {
             const subtotal = parseFloat(order.subtotal);
             const discountAmount = subtotal * (discountPercentage / 100);
             const newTotal = subtotal - discountAmount;
-    
+
             await pool.query(
                 'UPDATE orders SET discount_percentage = $1, discount_amount = $2, total = $3, discount_by = $4 WHERE id = $5',
                 [discountPercentage, discountAmount, newTotal, discountedByUser, order.id]
             );
         }
-        
+
         broadcast({ type: 'discountApplied', tableName });
         res.json({ status: 'success', message: `Discount of ${discountPercentage}% applied to table ${tableName}.` });
     } catch (error) {
@@ -1067,7 +1067,7 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), apiLimite
 app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (req, res, next) => {
     try {
         const query = `
-            SELECT 
+            SELECT
                 table_name,
                 json_agg(
                     json_build_object(
@@ -1084,7 +1084,7 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
             ORDER BY table_name;
         `;
         const result = await pool.query(query);
-        
+
         const processedData = result.rows.map(group => {
             const subtotal = group.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
             const discountAmount = group.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
@@ -1130,7 +1130,7 @@ app.get('/api/tables-management', authenticateToken('admin'), async (req, res, n
     }
 });
 
-app.post('/api/tables', authenticateToken('admin'), apiLimiter, 
+app.post('/api/tables', authenticateToken('admin'), apiLimiter,
     [
         body('name').notEmpty().withMessage('Table name is required')
     ],
@@ -1150,7 +1150,7 @@ app.post('/api/tables', authenticateToken('admin'), apiLimiter,
     }
 });
 
-app.put('/api/tables/:id', authenticateToken('admin'), apiLimiter, 
+app.put('/api/tables/:id', authenticateToken('admin'), apiLimiter,
     [
         body('name').notEmpty().withMessage('Table name is required')
     ],
@@ -1178,23 +1178,51 @@ app.delete('/api/tables/:id', authenticateToken('admin'), apiLimiter, async (req
     try {
         const { id } = req.params;
         const result = await pool.query('DELETE FROM tables WHERE id = $1', [id]);
-        
+
         if (result.rowCount === 0) {
             return res.status(404).json({ status: 'error', message: 'Table not found.' });
         }
-        
+
         res.json({ status: 'success', message: 'Table deleted successfully.' });
     } catch (error) {
         next(error);
     }
 });
 
+// ✅ ============================================================= ✅
+// ---            โค้ดที่เพิ่มเข้ามาใหม่เพื่อแก้ไขปัญหา             ---
+// ✅ ============================================================= ✅
+app.put('/api/tables/reorder', authenticateToken('admin'), apiLimiter, async (req, res, next) => {
+    const { order } = req.body;
+    if (!order || !Array.isArray(order)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid order data provided.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const updatePromises = order.map((id, index) => {
+            return client.query('UPDATE tables SET sort_order = $1 WHERE id = $2', [index, id]);
+        });
+        await Promise.all(updatePromises);
+        await client.query('COMMIT');
+        res.json({ status: 'success', message: 'Tables reordered successfully.' });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        next(error);
+    } finally {
+        client.release();
+    }
+});
+// ✅ ============================================================= ✅
+
+
 app.get('/api/bar-categories', async (req, res, next) => {
     try {
         const query = `
-            SELECT id, name_th, name_en 
-            FROM categories 
-            WHERE station_type = 'bar' 
+            SELECT id, name_th, name_en
+            FROM categories
+            WHERE station_type = 'bar'
             ORDER BY sort_order ASC`;
         const result = await pool.query(query);
         res.json({ status: 'success', data: result.rows });
@@ -1220,9 +1248,9 @@ app.get('/api/categories-by-station', authenticateToken('kitchen', 'bar', 'admin
 app.get('/api/stock-items', authenticateToken('admin'), async (req, res, next) => {
     try {
         const query = `
-            SELECT id, name_th, current_stock 
-            FROM menu_items 
-            WHERE manage_stock = true 
+            SELECT id, name_th, current_stock
+            FROM menu_items
+            WHERE manage_stock = true
             ORDER BY name_th ASC;
         `;
         const result = await pool.query(query);
@@ -1232,7 +1260,7 @@ app.get('/api/stock-items', authenticateToken('admin'), async (req, res, next) =
     }
 });
 
-app.put('/api/update-item-stock/:id', authenticateToken('admin'), apiLimiter, 
+app.put('/api/update-item-stock/:id', authenticateToken('admin'), apiLimiter,
     [
         body('current_stock').isNumeric().withMessage('Current stock must be a number.')
     ],
@@ -1295,7 +1323,7 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res, next)
                 COALESCE(SUM(item_total_price) FILTER (WHERE station_type = 'bar'), 0) as bar_total_sales
             FROM ExpandedItems;
         `;
-        
+
         const summaryResult = await pool.query(summaryQuery, [queryDate]);
         const summaryData = summaryResult.rows[0];
 
@@ -1343,7 +1371,7 @@ app.get('/api/next-bar-number', authenticateToken('bar', 'admin', 'cashier'), as
             LIMIT 1;
         `;
         const result = await pool.query(query);
-        
+
         let nextNumber = 1;
         if (result.rows.length > 0) {
             const lastNumber = parseInt(result.rows[0].table_name.split('-')[1] || '0', 10);
@@ -1361,7 +1389,7 @@ app.get('/api/next-bar-number', authenticateToken('bar', 'admin', 'cashier'), as
 // =================================================================
 function errorHandler(err, req, res, next) {
   console.error('An error occurred:', err.stack);
-  
+
   if (err.code === '23505') { // Unique violation in PostgreSQL
     return res.status(409).json({ status: 'error', message: 'ข้อมูลนี้มีอยู่ในระบบแล้ว' });
   }
@@ -1369,9 +1397,9 @@ function errorHandler(err, req, res, next) {
     return res.status(400).json({ status: 'error', message: 'ไม่สามารถลบข้อมูลนี้ได้ เนื่องจากมีการใช้งานอยู่ที่อื่น' });
   }
 
-  res.status(500).json({ 
-    status: 'error', 
-    message: 'เกิดข้อผิดพลาดบางอย่างในระบบ' 
+  res.status(500).json({
+    status: 'error',
+    message: 'เกิดข้อผิดพลาดบางอย่างในระบบ'
   });
 }
 
