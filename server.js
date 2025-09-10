@@ -12,6 +12,7 @@ const { formatInTimeZone } = require('date-fns-tz');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
 const WebSocket = require('ws');
+const rateLimit = require('express-rate-limit'); // <-- เพิ่มเข้ามา
 
 const app = express();
 const server = http.createServer(app);
@@ -59,6 +60,15 @@ const pool = new Pool({
 const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
 
+// Rate Limiter for Login
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // หน้าต่างเวลา 15 นาที
+    max: 10, // อนุญาตให้เรียกได้สูงสุด 10 ครั้งใน 15 นาที
+    message: 'คุณพยายามล็อกอินมากเกินไป กรุณาลองใหม่อีกครั้งใน 15 นาที',
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
 function authenticateToken(...allowedRoles) {
     return function(req, res, next) {
         const authHeader = req.headers['authorization'];
@@ -105,7 +115,7 @@ function decodeTokenOptional(req, res, next) {
 
 app.get('/', (req, res) => res.status(200).send('Tonnam Cafe Backend is running with Supabase!'));
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res) => { // <-- เพิ่ม loginLimiter
     try {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
@@ -302,17 +312,13 @@ app.get('/api/cafe-menu', async (req, res) => {
     }
 });
 
-// แก้ไขฟังก์ชัน app.post('/api/orders', ...) ทั้งหมดด้วยโค้ดชุดนี้
 app.post('/api/orders', decodeTokenOptional, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query("SET TimeZone = 'Asia/Bangkok';");
 
-        // --- START: ส่วนที่แก้ไข ---
-        // เพิ่ม isTakeaway เข้ามาในการดึงข้อมูลจาก req.body
         const { cart, tableNumber, specialRequest, isTakeaway, orderSource, discountPercentage = 0 } = req.body; 
-        // --- END: ส่วนที่แก้ไข ---
 
         if (!cart || cart.length === 0) {
             return res.status(400).json({ status: 'error', message: 'Cart is empty' });
@@ -416,7 +422,7 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
             finalTotal, 
             specialRequest || '',
             finalStatus,
-            isTakeaway, // <-- **จุดที่แก้ไข** ใช้ค่า isTakeaway ที่ส่งมาจาก Frontend
+            isTakeaway,
             discountedByUser
         ];
         const result = await client.query(query, values);
@@ -442,7 +448,6 @@ app.post('/api/orders', decodeTokenOptional, async (req, res) => {
         client.release();
     }
 });
-
 
 app.post('/api/request-bill', async (req, res) => {
     try {
@@ -1345,9 +1350,6 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
 });
 
 
-// =================================================================
-// --- NEW ENDPOINT FOR BAR RECEIPT NUMBER ---
-// =================================================================
 app.get('/api/next-bar-number', authenticateToken('bar', 'admin', 'cashier'), async (req, res) => {
     try {
         await pool.query("SET TimeZone = 'Asia/Bangkok';");
