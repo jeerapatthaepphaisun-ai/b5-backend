@@ -901,8 +901,7 @@ app.get('/api/get-orders', authenticateToken('kitchen', 'bar', 'admin'), async (
 
         res.json({ status: 'success', data: filteredOrders });
 
-    } catch (error)
-    {
+    } catch (error) { // The 'try' block was missing its closing '}' before this 'catch'
         console.error('Failed to fetch orders:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch orders.' });
     }
@@ -921,6 +920,7 @@ app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), asy
             if (result.rowCount === 0) {
                 return res.status(404).json({ status: 'error', message: 'Order not found' });
             }
+            broadcast({ type: 'orderStatusUpdate', order: result.rows[0] });
             return res.json({ status: 'success', data: result.rows[0] });
         }
         
@@ -959,10 +959,12 @@ app.post('/api/update-status', authenticateToken('kitchen', 'bar', 'admin'), asy
                 ['Serving', orderId]
             );
             await client.query('COMMIT'); 
+            broadcast({ type: 'orderStatusUpdate', order: finalResult.rows[0] });
             return res.json({ status: 'success', data: finalResult.rows[0] });
         }
 
         await client.query('COMMIT'); 
+        broadcast({ type: 'orderStatusUpdate', order: updatedOrder });
         res.json({ status: 'success', data: updatedOrder });
 
     } catch (error) {
@@ -1036,6 +1038,7 @@ app.post('/api/clear-table', authenticateToken('cashier', 'admin'), async (req, 
         await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
         await pool.query("UPDATE tables SET status = 'Available' WHERE name = $1", [tableName]);
         
+        broadcast({ type: 'tableCleared', tableName });
         res.json({ status: 'success', message: `Table ${tableName} cleared successfully.` });
     } catch (error) {
         console.error('Failed to clear table:', error);
@@ -1071,7 +1074,8 @@ app.post('/api/apply-discount', authenticateToken('cashier', 'admin'), async (re
                 [discountPercentage, discountAmount, newTotal, discountedByUser, order.id]
             );
         }
-    
+        
+        broadcast({ type: 'discountApplied', tableName });
         res.json({ status: 'success', message: `Discount of ${discountPercentage}% applied to table ${tableName}.` });
     } catch (error) {
         console.error('Error applying discount:', error);
@@ -1130,6 +1134,7 @@ app.post('/api/clear-takeaway', authenticateToken('cashier', 'admin'), async (re
             return res.status(400).json({ status: 'error', message: 'Invalid order name.' });
         }
         await pool.query("UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'", [tableName]);
+        broadcast({ type: 'takeawayCleared', tableName });
         res.json({ status: 'success', message: `Order ${tableName} cleared.` });
     } catch (error) {
         console.error('Failed to clear takeaway order:', error);
@@ -1380,10 +1385,3 @@ app.get('/api/next-bar-number', authenticateToken('bar', 'admin', 'cashier'), as
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Tonnam Cafe Backend is running on port ${PORT}`);
 });
-}
-ตอนนี้ผมมี 3 Frontend ที่ใช้งานอยู่คือ
-1. Bar pos
-2. KDS
-3. Customer menu
-
-ช่วยตรวจสอบโค้ดทั้งหมดแล้วแก้ไขให้ถูกต้อง และใช้ร่วมกันได้ให้หน่อยครับ
