@@ -1344,6 +1344,34 @@ app.get('/api/dashboard-kds', authenticateToken('admin'), async (req, res) => {
     }
 });
 
+
+// =================================================================
+// --- NEW ENDPOINT FOR BAR RECEIPT NUMBER ---
+// =================================================================
+app.get('/api/next-bar-number', authenticateToken('bar', 'admin', 'cashier'), async (req, res) => {
+    try {
+        await pool.query("SET TimeZone = 'Asia/Bangkok';");
+        const query = `
+            SELECT table_name FROM orders
+            WHERE table_name LIKE 'Bar-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE
+            ORDER BY created_at DESC
+            LIMIT 1;
+        `;
+        const result = await pool.query(query);
+        
+        let nextNumber = 1;
+        if (result.rows.length > 0) {
+            const lastNumber = parseInt(result.rows[0].table_name.split('-')[1] || '0', 10);
+            nextNumber = lastNumber + 1;
+        }
+        res.json({ status: 'success', nextNumber });
+    } catch (error) {
+        console.error('Failed to get next bar number:', error);
+        res.status(500).json({ status: 'error', message: 'Could not generate receipt number.' });
+    }
+});
+
+
 // =================================================================
 // --- Server Start ---
 // =================================================================
