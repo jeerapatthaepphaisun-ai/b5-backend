@@ -207,7 +207,7 @@ app.get('/api/menu', async (req, res, next) => {
         const menuQuery = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             ${baseQuery}
-            ORDER BY mi.sort_order ASC, mi.name_th ASC
+            ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC
             LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length};
         `;
 
