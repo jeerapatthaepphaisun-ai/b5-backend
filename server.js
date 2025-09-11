@@ -26,7 +26,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// --- FIX: Trust proxy for Render.com's environment ---
+// Trust proxy for Render.com's environment
 app.set('trust proxy', 1);
 
 // Supabase & Multer Setup
@@ -207,7 +207,7 @@ app.get('/api/menu', async (req, res, next) => {
         const menuQuery = `
             SELECT mi.*, c.name_th as category_th, c.name_en as category_en
             ${baseQuery}
-            ORDER BY c.sort_order ASC, mi.is_recommended DESC, mi.name_th ASC
+            ORDER BY mi.sort_order ASC, mi.name_th ASC
             LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length};
         `;
 
@@ -276,7 +276,7 @@ app.get('/api/cafe-menu', async (req, res, next) => {
             FROM menu_items mi
             JOIN categories c ON mi.category_id = c.id
             WHERE ${whereClauses.join(' AND ')}
-            ORDER BY c.sort_order ASC, mi.is_recommended DESC, mi.name_th ASC;
+            ORDER BY mi.sort_order ASC, mi.name_th ASC;
         `;
         const result = await pool.query(query, queryParams);
 
@@ -708,6 +708,29 @@ app.get('/api/menu-items/:id', authenticateToken('admin'), async (req, res, next
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
         next(error);
+    }
+});
+
+app.put('/api/menu-items/reorder', authenticateToken('admin'), apiLimiter, async (req, res, next) => {
+    const { order } = req.body;
+    if (!order || !Array.isArray(order)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid order data provided.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const updatePromises = order.map((id, index) => {
+            return client.query('UPDATE menu_items SET sort_order = $1 WHERE id = $2', [index, id]);
+        });
+        await Promise.all(updatePromises);
+        await client.query('COMMIT');
+        res.json({ status: 'success', message: 'Menu items reordered successfully.' });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        next(error);
+    } finally {
+        client.release();
     }
 });
 
@@ -1146,8 +1169,6 @@ app.post('/api/tables', authenticateToken('admin'), apiLimiter,
     }
 });
 
-// --- FIX: Correct Route Order ---
-// The specific route '/reorder' must be defined BEFORE the parameterized route '/:id'
 app.put('/api/tables/reorder', authenticateToken('admin'), apiLimiter, async (req, res, next) => {
     const { order } = req.body;
     if (!order || !Array.isArray(order)) {
