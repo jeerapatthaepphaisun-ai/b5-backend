@@ -1127,7 +1127,7 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
                     ) ORDER BY created_at
                 ) as orders_data
             FROM orders
-            WHERE (table_name LIKE 'Takeaway-%' OR table_name LIKE 'Bar-%') AND status != 'Paid'
+            WHERE table_name LIKE 'Takeaway-%' AND status != 'Paid'
             GROUP BY table_name
             ORDER BY table_name;
         `;
