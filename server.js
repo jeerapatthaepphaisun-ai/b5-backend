@@ -13,7 +13,6 @@ const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
 const WebSocket = require('ws');
 const rateLimit = require('express-rate-limit');
-// ✨ STEP 6: เพิ่ม Library สำหรับ Input Validation
 const { body, validationResult } = require('express-validator');
 
 const app = express();
@@ -71,7 +70,6 @@ const loginLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-// ✨ STEP 2: เพิ่ม Rate Limiter สำหรับ API ทั่วไป
 const apiLimiter = rateLimit({
 	windowMs: 15 * 60 * 1000,
 	max: 100,
@@ -127,7 +125,11 @@ function decodeTokenOptional(req, res, next) {
 
 app.get('/', (req, res) => res.status(200).send('Tonnam Cafe Backend is running with Supabase!'));
 
-// ✨ STEP 4: ปรับปรุง Route ทั้งหมดให้ใช้ Centralized Error Handler (ลบ try-catch ที่ไม่จำเป็น)
+// --- Endpoint สำหรับตรวจสอบเวอร์ชัน ---
+app.get('/api/version-check', (req, res) => {
+    res.json({ status: 'success', version: '2.1-final-check' });
+});
+
 app.post('/api/login', loginLimiter, async (req, res, next) => {
     try {
         const { username, password } = req.body;
@@ -495,7 +497,6 @@ app.post('/api/upload-image', authenticateToken('admin'), apiLimiter, upload.sin
     }
 });
 
-// ✨ STEP 3: สร้าง API Endpoint ใหม่สำหรับแจ้งเตือนสต็อก
 app.get('/api/stock-alerts', authenticateToken('admin'), async (req, res, next) => {
     try {
         const LOW_STOCK_THRESHOLD = 5;
@@ -585,7 +586,6 @@ app.get('/api/dashboard-data', authenticateToken('admin'), async (req, res, next
 });
 
 app.post('/api/categories', authenticateToken('admin'), apiLimiter,
-    // ✨ STEP 6: เพิ่ม Validation Rules
     [
         body('name_th', 'กรุณาระบุชื่อหมวดหมู่ (ไทย)').notEmpty().trim(),
         body('sort_order', 'กรุณาระบุลำดับเป็นตัวเลข').isNumeric(),
@@ -608,7 +608,6 @@ app.post('/api/categories', authenticateToken('admin'), apiLimiter,
     }
 });
 
-// ✨ STEP 5: สร้าง API Endpoint ใหม่สำหรับจัดลำดับ Categories
 app.put('/api/categories/reorder', authenticateToken('admin'), apiLimiter, async (req, res, next) => {
     const { order } = req.body;
     if (!order || !Array.isArray(order)) {
@@ -1189,9 +1188,6 @@ app.delete('/api/tables/:id', authenticateToken('admin'), apiLimiter, async (req
     }
 });
 
-// ✅ ============================================================= ✅
-// ---            โค้ดที่เพิ่มเข้ามาใหม่เพื่อแก้ไขปัญหา             ---
-// ✅ ============================================================= ✅
 app.put('/api/tables/reorder', authenticateToken('admin'), apiLimiter, async (req, res, next) => {
     const { order } = req.body;
     if (!order || !Array.isArray(order)) {
@@ -1214,7 +1210,6 @@ app.put('/api/tables/reorder', authenticateToken('admin'), apiLimiter, async (re
         client.release();
     }
 });
-// ✅ ============================================================= ✅
 
 
 app.get('/api/bar-categories', async (req, res, next) => {
@@ -1385,7 +1380,7 @@ app.get('/api/next-bar-number', authenticateToken('bar', 'admin', 'cashier'), as
 
 
 // =================================================================
-// --- ✨ STEP 4: Centralized Error Handler ---
+// --- Error Handler ---
 // =================================================================
 function errorHandler(err, req, res, next) {
   console.error('An error occurred:', err.stack);
