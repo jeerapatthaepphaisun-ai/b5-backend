@@ -26,6 +26,9 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// --- FIX: Trust proxy for Render.com's environment ---
+app.set('trust proxy', 1);
+
 // Supabase & Multer Setup
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const upload = multer({ storage: multer.memoryStorage() });
@@ -45,7 +48,6 @@ function broadcast(data) {
         }
     });
 }
-
 
 // =================================================================
 // --- การเชื่อมต่อฐานข้อมูล (Database Connection) ---
@@ -124,11 +126,6 @@ function decodeTokenOptional(req, res, next) {
 // =================================================================
 
 app.get('/', (req, res) => res.status(200).send('Tonnam Cafe Backend is running with Supabase!'));
-
-// --- Endpoint สำหรับตรวจสอบเวอร์ชัน ---
-app.get('/api/version-check', (req, res) => {
-    res.json({ status: 'success', version: '2.1-final-check' });
-});
 
 app.post('/api/login', loginLimiter, async (req, res, next) => {
     try {
@@ -1078,7 +1075,7 @@ app.get('/api/takeaway-orders', authenticateToken('cashier', 'admin'), async (re
                     ) ORDER BY created_at
                 ) as orders_data
             FROM orders
-            WHERE table_name LIKE 'Takeaway-%' AND status != 'Paid'
+            WHERE (table_name LIKE 'Takeaway-%' OR table_name LIKE 'Bar-%') AND status != 'Paid'
             GROUP BY table_name
             ORDER BY table_name;
         `;
@@ -1149,6 +1146,31 @@ app.post('/api/tables', authenticateToken('admin'), apiLimiter,
     }
 });
 
+// --- FIX: Correct Route Order ---
+// The specific route '/reorder' must be defined BEFORE the parameterized route '/:id'
+app.put('/api/tables/reorder', authenticateToken('admin'), apiLimiter, async (req, res, next) => {
+    const { order } = req.body;
+    if (!order || !Array.isArray(order)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid order data provided.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const updatePromises = order.map((id, index) => {
+            return client.query('UPDATE tables SET sort_order = $1 WHERE id = $2', [index, id]);
+        });
+        await Promise.all(updatePromises);
+        await client.query('COMMIT');
+        res.json({ status: 'success', message: 'Tables reordered successfully.' });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        next(error);
+    } finally {
+        client.release();
+    }
+});
+
 app.put('/api/tables/:id', authenticateToken('admin'), apiLimiter,
     [
         body('name').notEmpty().withMessage('Table name is required')
@@ -1187,30 +1209,6 @@ app.delete('/api/tables/:id', authenticateToken('admin'), apiLimiter, async (req
         next(error);
     }
 });
-
-app.put('/api/tables/reorder', authenticateToken('admin'), apiLimiter, async (req, res, next) => {
-    const { order } = req.body;
-    if (!order || !Array.isArray(order)) {
-        return res.status(400).json({ status: 'error', message: 'Invalid order data provided.' });
-    }
-
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        const updatePromises = order.map((id, index) => {
-            return client.query('UPDATE tables SET sort_order = $1 WHERE id = $2', [index, id]);
-        });
-        await Promise.all(updatePromises);
-        await client.query('COMMIT');
-        res.json({ status: 'success', message: 'Tables reordered successfully.' });
-    } catch (error) {
-        await client.query('ROLLBACK');
-        next(error);
-    } finally {
-        client.release();
-    }
-});
-
 
 app.get('/api/bar-categories', async (req, res, next) => {
     try {
