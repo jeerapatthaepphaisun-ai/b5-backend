@@ -734,6 +734,35 @@ app.put('/api/menu-items/reorder', authenticateToken('admin'), apiLimiter, async
     }
 });
 
+// --- API for Updating a Single Menu Item's Sort Order ---
+app.put('/api/menu-items/:id/sort-order', authenticateToken('admin'), apiLimiter,
+    [
+        body('sort_order').isNumeric().withMessage('Sort order must be a number.')
+    ],
+    async (req, res, next) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { id } = req.params;
+        const { sort_order } = req.body;
+
+        const result = await pool.query(
+            'UPDATE menu_items SET sort_order = $1 WHERE id = $2 RETURNING id, sort_order',
+            [sort_order, id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Menu item not found.' });
+        }
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        next(error);
+    }
+});
+
 app.put('/api/menu-items/:id', authenticateToken('admin'), apiLimiter,
     [
         body('name_th').notEmpty().withMessage('กรุณากรอกชื่อเมนู'),
