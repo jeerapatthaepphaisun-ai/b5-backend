@@ -4,8 +4,13 @@ const router = express.Router();
 const takeawayController = require('../controllers/takeawayController');
 const { authenticateToken } = require('../middleware/auth');
 
-// กำหนดเส้นทาง GET / 
-// ซึ่งเมื่อรวมกับ prefix ใน server.js จะกลายเป็น /api/takeaway-orders
+// GET /api/takeaway-orders - สำหรับ Cashier POS
 router.get('/', authenticateToken('cashier', 'admin'), takeawayController.getTakeawayOrders);
+
+// POST /api/takeaway-orders/clear - สำหรับ Cashier POS
+router.post('/clear', authenticateToken('cashier', 'admin'), takeawayController.clearTakeawayOrder);
+
+// GET /api/takeaway-orders/next-bar-number - สำหรับ Bar POS (เนื่องจากเป็น Logic คล้ายกันจึงจัด Route ไว้ด้วยกัน)
+router.get('/next-bar-number', authenticateToken('bar', 'admin'), takeawayController.getNextBarNumber);
 
 module.exports = router;

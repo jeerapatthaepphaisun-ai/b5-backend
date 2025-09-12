@@ -46,15 +46,38 @@ const createOrder = async (req, res, next) => {
              return res.status(400).json({ status: 'error', message: 'Table number or order type is required.' });
         }
         
-        // Logic for calculating totals and updating stock
         let calculatedSubtotal = 0;
+        const updatedStockItems = []; 
+
         for (const item of cart) {
-            const itemResult = await client.query('SELECT price, stock_status, name_th FROM menu_items WHERE id = $1', [item.productId || item.id]);
+            const itemResult = await client.query('SELECT price, stock_status, name_th, current_stock, manage_stock FROM menu_items WHERE id = $1', [item.productId || item.id]);
             if (itemResult.rows.length === 0) throw new Error(`Item with ID ${item.id} not found.`);
-            if (itemResult.rows[0].stock_status === 'out_of_stock') throw new Error(`Item "${itemResult.rows[0].name_th}" is out of stock.`);
+            
+            if (itemResult.rows[0].stock_status === 'out_of_stock') {
+                await client.query('ROLLBACK');
+                client.release();
+                return res.status(409).json({
+                    status: 'error',
+                    message: 'Item is out of stock.',
+                    errorCode: 'OUT_OF_STOCK',
+                    errorDetails: {
+                        itemId: item.productId || item.id,
+                        itemName: itemResult.rows[0].name_th
+                    }
+                });
+            }
+            
             calculatedSubtotal += parseFloat(item.price) * item.quantity;
-            if (item.productId || item.id) {
-                await client.query(`UPDATE menu_items SET current_stock = GREATEST(0, current_stock - $1) WHERE id = $2 AND manage_stock = true`,[item.quantity, item.productId || item.id]);
+
+            if (itemResult.rows[0].manage_stock) {
+                const newStock = itemResult.rows[0].current_stock - item.quantity;
+                await client.query(`UPDATE menu_items SET current_stock = $1 WHERE id = $2`, [newStock, item.productId || item.id]);
+                
+                updatedStockItems.push({
+                    id: item.productId || item.id,
+                    current_stock: newStock,
+                    stock_status: newStock > 0 ? 'in_stock' : 'out_of_stock'
+                });
             }
         }
         await client.query(`UPDATE menu_items SET stock_status = 'out_of_stock' WHERE manage_stock = true AND current_stock <= 0`);
@@ -68,15 +91,22 @@ const createOrder = async (req, res, next) => {
         const result = await client.query(query, values);
 
         await client.query('COMMIT');
+        
         const newOrder = result.rows[0];
+        
         req.broadcast({ type: 'newOrder', order: newOrder });
+
+        if (updatedStockItems.length > 0) {
+            req.broadcast({ type: 'stockUpdate', payload: updatedStockItems });
+        }
+
         res.status(201).json({ status: 'success', data: newOrder });
 
     } catch (error) {
         await client.query('ROLLBACK');
         return next(error);
     } finally {
-        client.release();
+        if (client.release) client.release();
     }
 };
 
@@ -112,7 +142,6 @@ const updateOrderStatus = async (req, res, next) => {
         await client.query('BEGIN');
         const { orderId, newStatus, station } = req.body;
 
-        // Simplified logic for non-serving status
         if (newStatus !== 'Serving') {
             const result = await client.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
             if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Order not found' });
@@ -121,7 +150,6 @@ const updateOrderStatus = async (req, res, next) => {
             return res.json({ status: 'success', data: result.rows[0] });
         }
 
-        // Logic for 'Serving' status and station completion
         const updateStationResult = await client.query(`UPDATE orders SET completed_stations = completed_stations || $1::jsonb WHERE id = $2 AND NOT completed_stations @> $1::jsonb RETURNING *`, [JSON.stringify(station), orderId]);
         if (updateStationResult.rowCount === 0) {
             const currentOrder = await client.query('SELECT * FROM orders WHERE id = $1', [orderId]);

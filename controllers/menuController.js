@@ -46,7 +46,6 @@ const getMenu = async (req, res, next) => {
         let menuItems = menuResult.rows;
 
         // Code to attach options remains the same as original...
-        // This could be refactored into a helper function later for cleanliness
         if (menuItems.length > 0) {
             const optionsResult = await pool.query('SELECT * FROM menu_options;');
             const optionsMap = optionsResult.rows.reduce((map, row) => {
@@ -216,6 +215,18 @@ const updateItemStock = async (req, res, next) => {
         if (result.rowCount === 0) {
             return res.status(404).json({ status: 'error', message: 'Menu item not found.' });
         }
+
+        // --- ✨ ส่วนที่เพิ่มเข้ามาใหม่ ---
+        // Broadcast การอัปเดตสต็อก
+        req.broadcast({
+            type: 'stockUpdate',
+            payload: [{
+                id: result.rows[0].id,
+                current_stock: result.rows[0].current_stock,
+                stock_status: result.rows[0].stock_status
+            }]
+        });
+        // --- จบส่วนที่เพิ่มเข้ามาใหม่ ---
 
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {

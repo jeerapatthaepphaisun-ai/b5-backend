@@ -100,8 +100,46 @@ const createTable = async (req, res, next) => {
     }
 };
 
-// Other CRUD operations for table management... (reorder, update, delete)
-// ... (omitted for brevity, but you would add reorder, update, and delete functions here)
+// --- ✨ โค้ดที่เพิ่มเข้ามาใหม่ ---
+// GET /api/tables/status/:tableName
+const getTableStatus = async (req, res, next) => {
+    try {
+        const { tableName } = req.params;
+        const result = await pool.query(
+            "SELECT * FROM orders WHERE table_name = $1 AND status != 'Paid' ORDER BY created_at ASC",
+            [tableName]
+        );
+        res.json({ status: 'success', data: result.rows });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// POST /api/tables/request-bill
+const requestBill = async (req, res, next) => {
+    try {
+        const { tableName } = req.body;
+        if (!tableName) {
+            return res.status(400).json({ status: 'error', message: 'Table name is required.' });
+        }
+        
+        await pool.query(
+            "UPDATE tables SET status = 'Billing' WHERE name = $1",
+            [tableName]
+        );
+        
+        req.broadcast({ type: 'tableStatusUpdate', payload: { tableName, newStatus: 'Billing' } });
+
+        res.json({ status: 'success', message: `Table ${tableName} status updated to Billing.` });
+    } catch (error) {
+        next(error);
+    }
+};
+// --- จบส่วนที่เพิ่มเข้ามาใหม่ ---
+
+
+// Other CRUD operations for table management...
+// TODO: Implement reorder, update, and delete functions for table management here.
 
 module.exports = {
     getTableData,
@@ -109,5 +147,6 @@ module.exports = {
     applyDiscount,
     getAllTablesForManagement,
     createTable,
-    // ... add other exported functions
+    getTableStatus,
+    requestBill
 };
