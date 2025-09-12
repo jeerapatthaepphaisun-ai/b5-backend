@@ -84,16 +84,23 @@ const deleteCategory = async (req, res, next) => {
     }
 };
 
-// GET /api/categories/by-station (ฟังก์ชันที่เพิ่มเข้ามาใหม่)
+// GET /api/categories/by-station (The corrected function)
 const getCategoriesByStation = async (req, res, next) => {
     try {
         const { station } = req.query;
         if (!station) {
             return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station' });
         }
-        const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
-        const targetCategories = categoriesResult.rows.map(row => row.name_th);
-        res.json({ status: 'success', data: targetCategories });
+        
+        // Corrected SQL statement to select all necessary columns
+        const categoriesResult = await pool.query(
+            'SELECT id, name_th, name_en, station_type FROM categories WHERE station_type = $1 ORDER BY sort_order ASC', 
+            [station]
+        );
+        
+        // Return the full array of row objects
+        res.json({ status: 'success', data: categoriesResult.rows });
+
     } catch (error) {
         next(error);
     }
