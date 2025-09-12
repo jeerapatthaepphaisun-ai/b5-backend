@@ -1,8 +1,7 @@
-// controllers/categoryController.js
-const pool = require('../db'); // เรียกใช้การเชื่อมต่อ DB จากไฟล์ที่เราสร้าง
+const pool = require('../db');
 const { validationResult } = require('express-validator');
 
-//  logika pro získání všech kategorií
+// GET /api/categories
 const getAllCategories = async (req, res, next) => {
     try {
         const result = await pool.query('SELECT * FROM categories ORDER BY sort_order ASC');
@@ -12,7 +11,7 @@ const getAllCategories = async (req, res, next) => {
     }
 };
 
-// logika pro vytvoření nové kategorie
+// POST /api/categories
 const createCategory = async (req, res, next) => {
     try {
         const errors = validationResult(req);
@@ -30,7 +29,7 @@ const createCategory = async (req, res, next) => {
     }
 };
 
-// logika pro změnu pořadí kategorií
+// PUT /api/categories/reorder
 const reorderCategories = async (req, res, next) => {
     const { order } = req.body;
     if (!order || !Array.isArray(order)) {
@@ -53,7 +52,7 @@ const reorderCategories = async (req, res, next) => {
     }
 };
 
-// logika pro aktualizaci kategorie
+// PUT /api/categories/:id
 const updateCategory = async (req, res, next) => {
     try {
         const errors = validationResult(req);
@@ -73,7 +72,7 @@ const updateCategory = async (req, res, next) => {
     }
 };
 
-// logika pro smazání kategorie
+// DELETE /api/categories/:id
 const deleteCategory = async (req, res, next) => {
     try {
         const { id } = req.params;
@@ -85,11 +84,26 @@ const deleteCategory = async (req, res, next) => {
     }
 };
 
-// บรรทัดสำคัญ: ส่งออกทุกฟังก์ชันเพื่อให้ไฟล์อื่นเรียกใช้ได้
+// GET /api/categories/by-station (ฟังก์ชันที่เพิ่มเข้ามาใหม่)
+const getCategoriesByStation = async (req, res, next) => {
+    try {
+        const { station } = req.query;
+        if (!station) {
+            return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station' });
+        }
+        const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
+        const targetCategories = categoriesResult.rows.map(row => row.name_th);
+        res.json({ status: 'success', data: targetCategories });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getAllCategories,
     createCategory,
     reorderCategories,
     updateCategory,
-    deleteCategory
+    deleteCategory,
+    getCategoriesByStation
 };

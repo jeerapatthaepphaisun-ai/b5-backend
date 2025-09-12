@@ -1,55 +1,45 @@
-// routes/categoryRoutes.js
 const express = require('express');
-const router = express.Router(); // สร้าง Router ขึ้นมา
+const router = express.Router();
 const { body } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 
-// --- นำเข้า "พ่อครัว" ที่เราสร้างไว้ ---
 const categoryController = require('../controllers/categoryController');
-
-// --- นำเข้า "ผู้ช่วย" ที่เราจะสร้างในอนาคต (ตอนนี้ใส่ไว้ก่อน) ---
-// หมายเหตุ: เรายังไม่ได้ย้าย authenticateToken มา, แต่เราจะทำในรอบถัดไป
-// ตอนนี้ให้คอมเมนต์ไว้ก่อน หรือถ้าคุณทำขั้นตอนย้าย middleware แล้ว ก็เอาคอมเมนต์ออกได้เลย
 const { authenticateToken } = require('../middleware/auth');
-const apiLimiter = require('express-rate-limit')({ // rateLimit สำหรับไฟล์นี้
-    windowMs: 15 * 60 * 1000,
+
+// Define rate limiter for these specific routes
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100,
     message: 'คุณส่งคำขอมากเกินไป กรุณารอสักครู่',
     standardHeaders: true,
     legacyHeaders: false,
 });
 
+// Validation rules for category
+const categoryValidation = [
+    body('name_th', 'กรุณาระบุชื่อหมวดหมู่ (ไทย)').notEmpty().trim(),
+    body('sort_order', 'กรุณาระบุลำดับเป็นตัวเลข').isNumeric(),
+    body('name_en').optional().trim()
+];
 
-// --- กำหนดเส้นทางในเมนู ---
+// --- Define Routes ---
 
-// ถ้ามีคนเรียก GET มาที่ / จะให้พ่อครัว getAllCategories ทำงาน
+// GET /api/categories - Public route, no auth needed
 router.get('/', categoryController.getAllCategories);
 
-// ถ้ามีคนเรียก POST มาที่ / จะให้ authenticateToken ตรวจก่อน แล้วค่อยให้พ่อครัว createCategory ทำงาน
-router.post('/',
-    authenticateToken('admin'),
-    apiLimiter,
-    [
-        body('name_th', 'กรุณาระบุชื่อหมวดหมู่ (ไทย)').notEmpty().trim(),
-        body('sort_order', 'กรุณาระบุลำดับเป็นตัวเลข').isNumeric(),
-        body('name_en').optional().trim()
-    ],
-    categoryController.createCategory
-);
+// GET /api/categories/by-station - For KDS, requires auth (Route ที่เพิ่มเข้ามาใหม่)
+router.get('/by-station', authenticateToken('kitchen', 'bar', 'admin'), categoryController.getCategoriesByStation);
 
+// POST /api/categories - Admin only
+router.post('/', authenticateToken('admin'), apiLimiter, categoryValidation, categoryController.createCategory);
+
+// PUT /api/categories/reorder - Admin only
 router.put('/reorder', authenticateToken('admin'), apiLimiter, categoryController.reorderCategories);
 
-router.put('/:id',
-    authenticateToken('admin'),
-    apiLimiter,
-    [
-        body('name_th', 'กรุณาระบุชื่อหมวดหมู่ (ไทย)').notEmpty().trim(),
-        body('sort_order', 'กรุณาระบุลำดับเป็นตัวเลข').isNumeric(),
-        body('name_en').optional().trim()
-    ],
-    categoryController.updateCategory
-);
+// PUT /api/categories/:id - Admin only
+router.put('/:id', authenticateToken('admin'), apiLimiter, categoryValidation, categoryController.updateCategory);
 
+// DELETE /api/categories/:id - Admin only
 router.delete('/:id', authenticateToken('admin'), apiLimiter, categoryController.deleteCategory);
 
-// บรรทัดสำคัญ: ส่งออกเมนูนี้เพื่อให้ server.js รู้จัก
 module.exports = router;
