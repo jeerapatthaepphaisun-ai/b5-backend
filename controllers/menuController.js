@@ -86,6 +86,69 @@ const getMenu = async (req, res, next) => {
     }
 };
 
+// ✨ ADD THIS NEW FUNCTION for the Bar POS
+const getBarMenu = async (req, res, next) => {
+    try {
+        const { search } = req.query;
+        let queryParams = ['bar'];
+        let whereClauses = ["c.station_type = $1"];
+
+        if (search) {
+            queryParams.push(`%${search}%`);
+            whereClauses.push(`(mi.name_th ILIKE $${queryParams.length} OR mi.name_en ILIKE $${queryParams.length})`);
+        }
+
+        const menuQuery = `
+            SELECT mi.*, c.name_th as category_th, c.name_en as category_en
+            FROM menu_items mi
+            JOIN categories c ON mi.category_id = c.id
+            WHERE ${whereClauses.join(' AND ')}
+            ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC;
+        `;
+
+        const menuResult = await pool.query(menuQuery, queryParams);
+        let menuItems = menuResult.rows;
+
+        // This part is crucial to also get the "menu options"
+        if (menuItems.length > 0) {
+            const optionsResult = await pool.query('SELECT * FROM menu_options;');
+            const optionsMap = optionsResult.rows.reduce((map, row) => {
+                const { option_set_id, id, label_th, label_en, price_add } = row;
+                if (!map[option_set_id]) map[option_set_id] = [];
+                map[option_set_id].push({ option_id: id, label_th, label_en, price_add: parseFloat(price_add) });
+                return map;
+            }, {});
+
+            const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets;');
+            const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
+                if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
+                map[row.menu_item_id].push(row.option_set_id);
+                return map;
+            }, {});
+
+            menuItems = menuItems.map(item => {
+                const optionSetIds = menuOptionsLink[item.id] || [];
+                item.option_groups = optionSetIds.reduce((groups, id) => {
+                    if (optionsMap[id]) groups[id] = optionsMap[id];
+                    return groups;
+                }, {});
+                return item;
+            });
+        }
+
+        res.json({
+            status: 'success',
+            data: {
+                items: menuItems
+            }
+        });
+
+    } catch (error) {
+        next(error);
+    }
+};
+
+
 // POST /api/menu-items
 const createMenuItem = async (req, res, next) => {
     try {
@@ -216,8 +279,6 @@ const updateItemStock = async (req, res, next) => {
             return res.status(404).json({ status: 'error', message: 'Menu item not found.' });
         }
 
-        // --- ✨ ส่วนที่เพิ่มเข้ามาใหม่ ---
-        // Broadcast การอัปเดตสต็อก
         req.broadcast({
             type: 'stockUpdate',
             payload: [{
@@ -226,7 +287,6 @@ const updateItemStock = async (req, res, next) => {
                 stock_status: result.rows[0].stock_status
             }]
         });
-        // --- จบส่วนที่เพิ่มเข้ามาใหม่ ---
 
         res.json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -234,9 +294,9 @@ const updateItemStock = async (req, res, next) => {
     }
 };
 
-
 module.exports = {
     getMenu,
+    getBarMenu, // ✨ Export the new function
     createMenuItem,
     getMenuItemById,
     reorderMenuItems,

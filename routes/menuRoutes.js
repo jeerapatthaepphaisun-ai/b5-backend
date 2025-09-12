@@ -13,8 +13,11 @@ const menuItemValidation = [
     body('current_stock').isInt({ min: 0 }).withMessage('สต็อกต้องเป็นเลขจำนวนเต็ม 0 หรือมากกว่า')
 ];
 
-// GET /api/menu (Public facing menu)
+// GET /api/menu (Public facing menu for customers)
 router.get('/', menuController.getMenu);
+
+// GET /api/menu/bar (New route for the Bar POS)
+router.get('/bar', menuController.getBarMenu);
 
 // POST /api/menu/items (Create new menu item)
 router.post('/items', authenticateToken('admin'), menuItemValidation, menuController.createMenuItem);
