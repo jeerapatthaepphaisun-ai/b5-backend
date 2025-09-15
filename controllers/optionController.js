@@ -20,7 +20,7 @@ const getAllOptionSets = async (req, res, next) => {
                 ) FILTER (WHERE o.id IS NOT NULL), '[]') as options
             FROM option_sets os
             LEFT JOIN menu_options o ON os.id = o.option_set_id
-            GROUP BY os.id
+            GROUP BY os.id, os.name_th, os.name_en, os.created_at
             ORDER BY os.created_at;
         `;
         const result = await pool.query(query);
