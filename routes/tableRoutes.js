@@ -32,8 +32,11 @@ router.post('/management', authenticateToken('admin'), [
     body('name').notEmpty().withMessage('Table name is required')
 ], tableController.createTable);
 
-// TODO: Add routes for reorder, update, delete for table management here.
-// router.put('/management/reorder', authenticateToken('admin'), tableController.reorderTables);
+// ✨ เพิ่ม Route นี้เข้ามา
+// PUT /api/tables/management/reorder
+router.put('/management/reorder', authenticateToken('admin'), tableController.reorderTables);
+
+// TODO: Add routes for update, delete for table management here.
 // router.put('/management/:id', authenticateToken('admin'), tableController.updateTable);
 // router.delete('/management/:id', authenticateToken('admin'), tableController.deleteTable);
 

@@ -100,7 +100,6 @@ const createTable = async (req, res, next) => {
     }
 };
 
-// --- ✨ โค้ดที่เพิ่มเข้ามาใหม่ ---
 // GET /api/tables/status/:tableName
 const getTableStatus = async (req, res, next) => {
     try {
@@ -135,11 +134,29 @@ const requestBill = async (req, res, next) => {
         next(error);
     }
 };
-// --- จบส่วนที่เพิ่มเข้ามาใหม่ ---
 
-
-// Other CRUD operations for table management...
-// TODO: Implement reorder, update, and delete functions for table management here.
+// ✨ เพิ่มฟังก์ชันนี้เข้ามา
+const reorderTables = async (req, res, next) => {
+    const { order } = req.body;
+    if (!order || !Array.isArray(order)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid order data provided.' });
+    }
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const updatePromises = order.map((id, index) => {
+            return client.query('UPDATE tables SET sort_order = $1 WHERE id = $2', [index, id]);
+        });
+        await Promise.all(updatePromises);
+        await client.query('COMMIT');
+        res.json({ status: 'success', message: 'Tables reordered successfully.' });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        next(error);
+    } finally {
+        client.release();
+    }
+};
 
 module.exports = {
     getTableData,
@@ -148,5 +165,6 @@ module.exports = {
     getAllTablesForManagement,
     createTable,
     getTableStatus,
-    requestBill
+    requestBill,
+    reorderTables // ✨ เพิ่ม reorderTables เข้าไปใน exports
 };
