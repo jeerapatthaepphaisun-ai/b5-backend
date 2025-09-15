@@ -284,10 +284,8 @@ const updateItemStock = async (req, res, next) => {
     }
 };
 
-// ✨ เพิ่มฟังก์ชันนี้เข้ามา
 const getStockAlerts = async (req, res, next) => {
     try {
-        // ดึงสินค้าที่จัดการสต็อก, มีของ, และเหลือน้อยกว่า 10 ชิ้น
         const result = await pool.query(
             `SELECT id, name_th, current_stock FROM menu_items 
              WHERE manage_stock = true AND stock_status = 'in_stock' AND current_stock < 10 
@@ -296,6 +294,53 @@ const getStockAlerts = async (req, res, next) => {
         res.json({ status: 'success', data: result.rows });
     } catch (error) {
         next(error);
+    }
+};
+
+// GET /api/menu/items/:id/option-sets
+const getOptionSetsForMenuItem = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query(
+            'SELECT option_set_id FROM menu_item_option_sets WHERE menu_item_id = $1',
+            [id]
+        );
+        const selectedIds = result.rows.map(row => row.option_set_id);
+        res.json({ status: 'success', data: selectedIds });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// PUT /api/menu/items/:id/option-sets
+const updateOptionSetsForMenuItem = async (req, res, next) => {
+    const { id } = req.params;
+    const { optionSetIds } = req.body; // Expect an array of UUIDs
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+        // First, delete all existing associations for this menu item
+        await client.query('DELETE FROM menu_item_option_sets WHERE menu_item_id = $1', [id]);
+
+        // Then, insert the new associations
+        if (optionSetIds && optionSetIds.length > 0) {
+            const insertPromises = optionSetIds.map(setId => {
+                return client.query(
+                    'INSERT INTO menu_item_option_sets (menu_item_id, option_set_id) VALUES ($1, $2)',
+                    [id, setId]
+                );
+            });
+            await Promise.all(insertPromises);
+        }
+
+        await client.query('COMMIT');
+        res.json({ status: 'success', message: 'Menu item options updated successfully.' });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        next(error);
+    } finally {
+        client.release();
     }
 };
 
@@ -309,5 +354,7 @@ module.exports = {
     deleteMenuItem,
     getStockItems,
     updateItemStock,
-    getStockAlerts // ✨ Export ฟังก์ชันใหม่
+    getStockAlerts,
+    getOptionSetsForMenuItem,
+    updateOptionSetsForMenuItem
 };

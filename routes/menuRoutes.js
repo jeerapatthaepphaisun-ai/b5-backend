@@ -19,7 +19,6 @@ router.get('/', menuController.getMenu);
 // GET /api/menu/bar (New route for the Bar POS)
 router.get('/bar', menuController.getBarMenu);
 
-// ✨ เพิ่ม Route นี้เข้ามา
 // GET /api/menu/stock-alerts
 router.get('/stock-alerts', authenticateToken('admin'), menuController.getStockAlerts);
 
@@ -37,6 +36,10 @@ router.put('/items/:id', authenticateToken('admin'), menuItemValidation, menuCon
 
 // DELETE /api/menu/items/:id (Delete a menu item)
 router.delete('/items/:id', authenticateToken('admin'), menuController.deleteMenuItem);
+
+// ✨ เพิ่ม 2 Routes ใหม่สำหรับจัดการ Option Set ของเมนู
+router.get('/items/:id/option-sets', authenticateToken('admin'), menuController.getOptionSetsForMenuItem);
+router.put('/items/:id/option-sets', authenticateToken('admin'), menuController.updateOptionSetsForMenuItem);
 
 // GET /api/menu/stock-items
 router.get('/stock-items', authenticateToken('admin'), menuController.getStockItems);

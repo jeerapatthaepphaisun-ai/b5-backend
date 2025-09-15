@@ -61,6 +61,7 @@ const userRoutes = require('./routes/userRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const utilityRoutes = require('./routes/utilityRoutes');
 const takeawayRoutes = require('./routes/takeawayRoutes');
+const optionRoutes = require('./routes/optionRoutes'); // ✨ เพิ่มบรรทัดนี้
 
 // =================================================================
 // --- ลงทะเบียน Routes (Use Routes) ---
@@ -76,6 +77,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/utils', utilityRoutes); // สำหรับ /upload-image และอื่นๆ
 app.use('/api/takeaway-orders', takeawayRoutes);
+app.use('/api/options', optionRoutes); // ✨ เพิ่มบรรทัดนี้
 
 // =================================================================
 // --- Error Handler ---
