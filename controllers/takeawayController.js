@@ -20,7 +20,8 @@ const getTakeawayOrders = async (req, res, next) => {
                 ) as orders_data
             FROM orders 
             WHERE 
-                (table_name LIKE 'Takeaway-%' OR table_name LIKE 'Bar-%') 
+                -- ✨ แก้ไขเงื่อนไขตรงนี้: ลบ OR table_name LIKE 'Bar-%' ออกไป
+                table_name LIKE 'Takeaway-%'
                 AND status != 'Paid' 
             GROUP BY table_name, status
             ORDER BY table_name ASC;
@@ -60,6 +61,8 @@ const clearTakeawayOrder = async (req, res, next) => {
             return res.status(400).json({ status: 'error', message: 'Takeaway ID is required.' });
         }
 
+        // โค้ดส่วนนี้จะทำงานได้กับทั้ง Takeaway และ Bar แต่เนื่องจาก getTakeawayOrders ถูกแก้แล้ว
+        // หน้าแคชเชียร์จะไม่มีปุ่มให้กดเคลียร์ออเดอร์ของ Bar อีกต่อไป
         await pool.query(
             "UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'",
             [takeawayId]
