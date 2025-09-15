@@ -45,7 +45,6 @@ const getMenu = async (req, res, next) => {
         const menuResult = await pool.query(menuQuery, queryParams);
         let menuItems = menuResult.rows;
 
-        // Code to attach options remains the same as original...
         if (menuItems.length > 0) {
             const optionsResult = await pool.query('SELECT * FROM menu_options;');
             const optionsMap = optionsResult.rows.reduce((map, row) => {
@@ -86,7 +85,6 @@ const getMenu = async (req, res, next) => {
     }
 };
 
-// ✨ ADD THIS NEW FUNCTION for the Bar POS
 const getBarMenu = async (req, res, next) => {
     try {
         const { search } = req.query;
@@ -109,7 +107,6 @@ const getBarMenu = async (req, res, next) => {
         const menuResult = await pool.query(menuQuery, queryParams);
         let menuItems = menuResult.rows;
 
-        // This part is crucial to also get the "menu options"
         if (menuItems.length > 0) {
             const optionsResult = await pool.query('SELECT * FROM menu_options;');
             const optionsMap = optionsResult.rows.reduce((map, row) => {
@@ -149,7 +146,6 @@ const getBarMenu = async (req, res, next) => {
 };
 
 
-// POST /api/menu-items
 const createMenuItem = async (req, res, next) => {
     try {
         const errors = validationResult(req);
@@ -169,7 +165,6 @@ const createMenuItem = async (req, res, next) => {
     }
 };
 
-// GET /api/menu-items/:id
 const getMenuItemById = async (req, res, next) => {
     try {
         const { id } = req.params;
@@ -181,7 +176,6 @@ const getMenuItemById = async (req, res, next) => {
     }
 };
 
-// PUT /api/menu-items/reorder
 const reorderMenuItems = async (req, res, next) => {
     const { order } = req.body;
     if (!order || !Array.isArray(order)) {
@@ -204,7 +198,6 @@ const reorderMenuItems = async (req, res, next) => {
     }
 };
 
-// PUT /api/menu-items/:id
 const updateMenuItem = async (req, res, next) => {
     try {
         const errors = validationResult(req);
@@ -230,7 +223,6 @@ const updateMenuItem = async (req, res, next) => {
     }
 };
 
-// DELETE /api/menu-items/:id
 const deleteMenuItem = async (req, res, next) => {
     try {
         const { id } = req.params;
@@ -242,7 +234,6 @@ const deleteMenuItem = async (req, res, next) => {
     }
 };
 
-// GET /api/stock-items
 const getStockItems = async (req, res, next) => {
     try {
         const query = `
@@ -258,7 +249,6 @@ const getStockItems = async (req, res, next) => {
     }
 };
 
-// PUT /api/update-item-stock/:id
 const updateItemStock = async (req, res, next) => {
     try {
         const errors = validationResult(req);
@@ -294,14 +284,30 @@ const updateItemStock = async (req, res, next) => {
     }
 };
 
+// ✨ เพิ่มฟังก์ชันนี้เข้ามา
+const getStockAlerts = async (req, res, next) => {
+    try {
+        // ดึงสินค้าที่จัดการสต็อก, มีของ, และเหลือน้อยกว่า 10 ชิ้น
+        const result = await pool.query(
+            `SELECT id, name_th, current_stock FROM menu_items 
+             WHERE manage_stock = true AND stock_status = 'in_stock' AND current_stock < 10 
+             ORDER BY current_stock ASC`
+        );
+        res.json({ status: 'success', data: result.rows });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getMenu,
-    getBarMenu, // ✨ Export the new function
+    getBarMenu,
     createMenuItem,
     getMenuItemById,
     reorderMenuItems,
     updateMenuItem,
     deleteMenuItem,
     getStockItems,
-    updateItemStock
+    updateItemStock,
+    getStockAlerts // ✨ Export ฟังก์ชันใหม่
 };

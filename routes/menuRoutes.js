@@ -19,6 +19,10 @@ router.get('/', menuController.getMenu);
 // GET /api/menu/bar (New route for the Bar POS)
 router.get('/bar', menuController.getBarMenu);
 
+// ✨ เพิ่ม Route นี้เข้ามา
+// GET /api/menu/stock-alerts
+router.get('/stock-alerts', authenticateToken('admin'), menuController.getStockAlerts);
+
 // POST /api/menu/items (Create new menu item)
 router.post('/items', authenticateToken('admin'), menuItemValidation, menuController.createMenuItem);
 
