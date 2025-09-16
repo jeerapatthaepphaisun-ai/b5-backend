@@ -151,13 +151,13 @@ const createMenuItem = async (req, res, next) => {
         const errors = validationResult(req);
         if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, name_km, name_zh, desc_km, desc_zh, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
         
         const query = `
-            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock, manage_stock)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
+            INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, name_km, name_zh, desc_km, desc_zh, image_url, stock_status, discount_percentage, current_stock, manage_stock)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status || 'in_stock', discount_percentage || 0, current_stock || 0, manage_stock || false];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, name_km, name_zh, desc_km, desc_zh, image_url, stock_status || 'in_stock', discount_percentage || 0, current_stock || 0, manage_stock || false];
         const result = await pool.query(query, values);
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -204,17 +204,19 @@ const updateMenuItem = async (req, res, next) => {
         if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
         const { id } = req.params;
-        const { name_th, price, category_id, name_en, desc_th, desc_en, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
+        const { name_th, price, category_id, name_en, desc_th, desc_en, name_km, name_zh, desc_km, desc_zh, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
 
         let finalStockStatus = stock_status;
         if (manage_stock && current_stock > 0) finalStockStatus = 'in_stock';
         
         const query = `
             UPDATE menu_items
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, image_url = $7, stock_status = $8, discount_percentage = $9, current_stock = $10, manage_stock = $11
-            WHERE id = $12 RETURNING *;
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, 
+                name_km = $7, name_zh = $8, desc_km = $9, desc_zh = $10, 
+                image_url = $11, stock_status = $12, discount_percentage = $13, current_stock = $14, manage_stock = $15
+            WHERE id = $16 RETURNING *;
         `;
-        const values = [name_th, price, category_id, name_en, desc_th, desc_en, image_url, finalStockStatus, discount_percentage, current_stock, manage_stock, id];
+        const values = [name_th, price, category_id, name_en, desc_th, desc_en, name_km, name_zh, desc_km, desc_zh, image_url, finalStockStatus, discount_percentage, current_stock, manage_stock, id];
         const result = await pool.query(query, values);
         if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Menu item not found.' });
         res.json({ status: 'success', data: result.rows[0] });

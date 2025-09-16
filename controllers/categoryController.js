@@ -18,10 +18,10 @@ const createCategory = async (req, res, next) => {
         if (!errors.isEmpty()) {
             return res.status(400).json({ errors: errors.array() });
         }
-        const { name_th, name_en, sort_order } = req.body;
+        const { name_th, name_en, name_km, name_zh, sort_order } = req.body;
         const result = await pool.query(
-            'INSERT INTO categories (name_th, name_en, sort_order) VALUES ($1, $2, $3) RETURNING *',
-            [name_th, name_en, sort_order]
+            'INSERT INTO categories (name_th, name_en, name_km, name_zh, sort_order) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [name_th, name_en, name_km, name_zh, sort_order]
         );
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -60,10 +60,10 @@ const updateCategory = async (req, res, next) => {
             return res.status(400).json({ errors: errors.array() });
         }
         const { id } = req.params;
-        const { name_th, name_en, sort_order } = req.body;
+        const { name_th, name_en, name_km, name_zh, sort_order } = req.body;
         const result = await pool.query(
-            'UPDATE categories SET name_th = $1, name_en = $2, sort_order = $3 WHERE id = $4 RETURNING *',
-            [name_th, name_en, sort_order, id]
+            'UPDATE categories SET name_th = $1, name_en = $2, sort_order = $3, name_km = $4, name_zh = $5 WHERE id = $6 RETURNING *',
+            [name_th, name_en, sort_order, name_km, name_zh, id]
         );
         if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Category not found.' });
         res.json({ status: 'success', data: result.rows[0] });
