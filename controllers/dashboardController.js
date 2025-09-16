@@ -97,10 +97,21 @@ const getKdsDashboardData = async (req, res, next) => {
         const summaryData = summaryResult.rows[0];
 
         const discountedOrdersQuery = `
-            SELECT id, table_name, discount_percentage, discount_amount, total, discount_by
-            FROM orders
-            WHERE status = 'Paid' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = $1 AND discount_amount > 0
-            ORDER BY created_at DESC;
+            SELECT 
+                o.id, 
+                o.table_name, 
+                o.discount_percentage, 
+                o.discount_amount, 
+                o.total, 
+                -- ✨ แก้ไขตรงนี้: ดึง full_name จากตาราง users, ถ้าไม่มีให้ใช้ username แทน
+                COALESCE(u.full_name, o.discount_by) as discount_by_details
+            FROM orders AS o
+            LEFT JOIN users AS u ON o.discount_by = u.username
+            WHERE 
+                o.status = 'Paid' 
+                AND (o.created_at AT TIME ZONE 'Asia/Bangkok')::date = $1 
+                AND o.discount_amount > 0
+            ORDER BY o.created_at DESC;
         `;
         const discountedOrdersResult = await pool.query(discountedOrdersQuery, [queryDate]);
 
