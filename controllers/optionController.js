@@ -6,21 +6,25 @@ const pool = require('../db');
 const getAllOptionSets = async (req, res, next) => {
     try {
         const query = `
-            SELECT 
-                os.id, 
-                os.name_th, 
-                os.name_en, 
+            SELECT
+                os.id,
+                os.name_th,
+                os.name_en,
+                os.name_km,
+                os.name_zh,
                 COALESCE(json_agg(
                     json_build_object(
-                        'id', o.id, 
-                        'label_th', o.label_th, 
-                        'label_en', o.label_en, 
+                        'id', o.id,
+                        'label_th', o.label_th,
+                        'label_en', o.label_en,
+                        'label_km', o.label_km,
+                        'label_zh', o.label_zh,
                         'price_add', o.price_add
                     ) ORDER BY o.created_at
                 ) FILTER (WHERE o.id IS NOT NULL), '[]') as options
             FROM option_sets os
             LEFT JOIN menu_options o ON os.id = o.option_set_id
-            GROUP BY os.id, os.name_th, os.name_en, os.created_at
+            GROUP BY os.id
             ORDER BY os.created_at;
         `;
         const result = await pool.query(query);
@@ -33,10 +37,10 @@ const getAllOptionSets = async (req, res, next) => {
 // POST /api/options/sets
 const createOptionSet = async (req, res, next) => {
     try {
-        const { name_th, name_en } = req.body;
+        const { name_th, name_en, name_km, name_zh } = req.body;
         const result = await pool.query(
-            'INSERT INTO option_sets (name_th, name_en) VALUES ($1, $2) RETURNING *',
-            [name_th, name_en]
+            'INSERT INTO option_sets (name_th, name_en, name_km, name_zh) VALUES ($1, $2, $3, $4) RETURNING *',
+            [name_th, name_en, name_km, name_zh]
         );
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -48,10 +52,10 @@ const createOptionSet = async (req, res, next) => {
 const updateOptionSet = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { name_th, name_en } = req.body;
+        const { name_th, name_en, name_km, name_zh } = req.body;
         const result = await pool.query(
-            'UPDATE option_sets SET name_th = $1, name_en = $2 WHERE id = $3 RETURNING *',
-            [name_th, name_en, id]
+            'UPDATE option_sets SET name_th = $1, name_en = $2, name_km = $3, name_zh = $4 WHERE id = $5 RETURNING *',
+            [name_th, name_en, name_km, name_zh, id]
         );
         if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Option set not found.' });
         res.json({ status: 'success', data: result.rows[0] });
@@ -91,10 +95,10 @@ const deleteOptionSet = async (req, res, next) => {
 // POST /api/options
 const createOption = async (req, res, next) => {
     try {
-        const { option_set_id, label_th, label_en, price_add } = req.body;
+        const { option_set_id, label_th, label_en, label_km, label_zh, price_add } = req.body;
         const result = await pool.query(
-            'INSERT INTO menu_options (option_set_id, label_th, label_en, price_add) VALUES ($1, $2, $3, $4) RETURNING *',
-            [option_set_id, label_th, label_en, price_add || 0]
+            'INSERT INTO menu_options (option_set_id, label_th, label_en, label_km, label_zh, price_add) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+            [option_set_id, label_th, label_en, label_km, label_zh, price_add || 0]
         );
         res.status(201).json({ status: 'success', data: result.rows[0] });
     } catch (error) {
@@ -106,10 +110,10 @@ const createOption = async (req, res, next) => {
 const updateOption = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { label_th, label_en, price_add } = req.body;
+        const { label_th, label_en, label_km, label_zh, price_add } = req.body;
         const result = await pool.query(
-            'UPDATE menu_options SET label_th = $1, label_en = $2, price_add = $3 WHERE id = $4 RETURNING *',
-            [label_th, label_en, price_add, id]
+            'UPDATE menu_options SET label_th = $1, label_en = $2, label_km = $3, label_zh = $4, price_add = $5 WHERE id = $6 RETURNING *',
+            [label_th, label_en, label_km, label_zh, price_add, id]
         );
         if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Option not found.' });
         res.json({ status: 'success', data: result.rows[0] });
