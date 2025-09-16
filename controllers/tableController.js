@@ -140,7 +140,6 @@ const requestBill = async (req, res, next) => {
     }
 };
 
-// ✨ เพิ่มฟังก์ชันนี้เข้ามา
 const reorderTables = async (req, res, next) => {
     const { order } = req.body;
     if (!order || !Array.isArray(order)) {
@@ -163,6 +162,32 @@ const reorderTables = async (req, res, next) => {
     }
 };
 
+const updateTable = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { name, sort_order } = req.body;
+        const result = await pool.query(
+            'UPDATE tables SET name = $1, sort_order = $2 WHERE id = $3 RETURNING *',
+            [name, sort_order, id]
+        );
+        if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Table not found.' });
+        res.json({ status: 'success', data: result.rows[0] });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deleteTable = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM tables WHERE id = $1', [id]);
+        if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Table not found.' });
+        res.json({ status: 'success', message: 'Table deleted successfully.' });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getTableData,
     clearTable,
@@ -171,5 +196,7 @@ module.exports = {
     createTable,
     getTableStatus,
     requestBill,
-    reorderTables // ✨ เพิ่ม reorderTables เข้าไปใน exports
+    reorderTables,
+    updateTable,
+    deleteTable
 };
