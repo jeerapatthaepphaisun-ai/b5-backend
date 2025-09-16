@@ -48,9 +48,16 @@ const getMenu = async (req, res, next) => {
         if (menuItems.length > 0) {
             const optionsResult = await pool.query('SELECT * FROM menu_options;');
             const optionsMap = optionsResult.rows.reduce((map, row) => {
-                const { option_set_id, id, label_th, label_en, price_add } = row;
+                const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
                 if (!map[option_set_id]) map[option_set_id] = [];
-                map[option_set_id].push({ option_id: id, label_th, label_en, price_add: parseFloat(price_add) });
+                map[option_set_id].push({
+                    option_id: id,
+                    label_th,
+                    label_en,
+                    label_km,
+                    label_zh,
+                    price_add: parseFloat(price_add)
+                });
                 return map;
             }, {});
 
@@ -110,9 +117,16 @@ const getBarMenu = async (req, res, next) => {
         if (menuItems.length > 0) {
             const optionsResult = await pool.query('SELECT * FROM menu_options;');
             const optionsMap = optionsResult.rows.reduce((map, row) => {
-                const { option_set_id, id, label_th, label_en, price_add } = row;
+                const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
                 if (!map[option_set_id]) map[option_set_id] = [];
-                map[option_set_id].push({ option_id: id, label_th, label_en, price_add: parseFloat(price_add) });
+                map[option_set_id].push({
+                    option_id: id,
+                    label_th,
+                    label_en,
+                    label_km,
+                    label_zh,
+                    price_add: parseFloat(price_add)
+                });
                 return map;
             }, {});
 
