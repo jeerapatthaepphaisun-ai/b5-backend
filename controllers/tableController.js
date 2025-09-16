@@ -21,8 +21,13 @@ const getTableData = async (req, res, next) => {
             if (row.orders_data) {
                 const subtotal = row.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
                 const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
-                const total = row.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
+                const totalAfterDiscount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
                 const discountPercentage = row.orders_data[0]?.discount_percentage || 0;
+
+                // --- ✨ ส่วนที่เพิ่มเข้ามาเพื่อคำนวณ VAT ---
+                const VAT_RATE = 0.07; // 7% VAT
+                const finalTotalWithVAT = totalAfterDiscount * (1 + VAT_RATE);
+                // ------------------------------------------
 
                 acc[row.table_name] = {
                     tableName: row.table_name,
@@ -30,7 +35,7 @@ const getTableData = async (req, res, next) => {
                     status: row.table_status,
                     subtotal: subtotal,
                     discountAmount: discountAmount,
-                    total: total,
+                    total: finalTotalWithVAT, // ✨ แก้ไขให้ใช้ยอดสุทธิที่รวม VAT แล้ว
                     discountPercentage: discountPercentage
                 };
             }
