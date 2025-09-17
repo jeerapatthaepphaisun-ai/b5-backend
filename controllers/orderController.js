@@ -182,8 +182,56 @@ const updateOrderStatus = async (req, res, next) => {
     }
 };
 
+// GET /api/kds/orders (ฟังก์ชันใหม่สำหรับ KDS โดยเฉพาะ)
+const getKdsOrders = async (req, res, next) => {
+    try {
+        // 1. รับชื่อ station จาก URL (เช่น ?station=kitchen)
+        const { station } = req.query;
+        if (!station) {
+            return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station (kitchen หรือ bar)' });
+        }
+
+        // 2. ค้นหาหมวดหมู่ทั้งหมดที่อยู่ในความรับผิดชอบของ station นี้
+        const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
+        const targetCategories = categoriesResult.rows.map(row => row.name_th);
+
+        // ถ้า station นี้ไม่มีหมวดหมู่ที่ต้องรับผิดชอบ ก็ส่งข้อมูลว่างกลับไป
+        if (targetCategories.length === 0) {
+            return res.json({ status: 'success', data: [] });
+        }
+
+        // 3. ดึงออเดอร์ทั้งหมดที่ยังมีสถานะ "ค้างอยู่" (ยังไม่เสร็จหรือยังไม่จ่ายเงิน)
+        const query = `
+            SELECT * FROM orders
+            WHERE status IN ('Pending', 'Cooking', 'Preparing')
+            ORDER BY created_at ASC;
+        `;
+        const result = await pool.query(query);
+        
+        // 4. กรองเฉพาะออเดอร์ที่มีรายการอาหาร/เครื่องดื่มที่ station นี้ต้องทำ
+        const filteredOrders = result.rows.map(order => {
+            // กรอง items ในออเดอร์ ให้เหลือแต่รายการที่อยู่ใน targetCategories
+            const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
+            
+            // ถ้ามีรายการที่เกี่ยวข้องอย่างน้อย 1 รายการ ให้ส่งคืนออเดอร์นั้นไป
+            if (relevantItems.length > 0) {
+                return { ...order, items: relevantItems };
+            }
+            return null;
+        }).filter(Boolean); // .filter(Boolean) คือเทคนิคการลบค่า null ออกจาก array
+
+        // 5. ส่งข้อมูลออเดอร์ที่กรองแล้วกลับไปให้ KDS Frontend
+        res.json({ status: 'success', data: filteredOrders });
+
+    } catch (error) {
+        // หากเกิดข้อผิดพลาด ให้ส่งต่อไปยัง error handler
+        next(error);
+    }
+};
+
 module.exports = {
     createOrder,
     getOrdersByStation,
-    updateOrderStatus
+    updateOrderStatus,
+    getKdsOrders // << เพิ่มบรรทัดนี้เข้าไป
 };
