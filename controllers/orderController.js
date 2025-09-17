@@ -10,6 +10,11 @@ const createOrder = async (req, res, next) => {
         const { cart, tableNumber, specialRequest, isTakeaway, orderSource, discountPercentage = 0 } = req.body;
         if (!cart || cart.length === 0) return res.status(400).json({ status: 'error', message: 'Cart is empty' });
 
+        // --- ✨ ส่วนที่แก้ไข: ดึงข้อมูล Options ทั้งหมดมารอไว้ ---
+        const allOptionsResult = await client.query('SELECT id, label_th, label_en, label_km, label_zh FROM menu_options');
+        const optionsMap = new Map(allOptionsResult.rows.map(opt => [opt.id, opt]));
+        // ----------------------------------------------------
+
         let discountedByUser = null;
         if (discountPercentage > 0) {
             if (!req.user) return res.status(401).send('Unauthorized: A login is required to apply discounts.');
@@ -17,7 +22,7 @@ const createOrder = async (req, res, next) => {
         }
 
         let finalTableName;
-        // Logic for determining table name (Bar-X, Takeaway-X, etc.)
+        // ... (ส่วน Logic การหาชื่อโต๊ะยังคงเหมือนเดิม) ...
         if (orderSource === 'bar') {
             const lastBarOrderQuery = `SELECT table_name FROM orders WHERE table_name LIKE 'Bar-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE ORDER BY created_at DESC LIMIT 1;`;
             const lastBarResult = await client.query(lastBarOrderQuery);
@@ -48,12 +53,11 @@ const createOrder = async (req, res, next) => {
         
         let calculatedSubtotal = 0;
         const updatedStockItems = [];
-        const finalCartForStorage = []; // สร้าง Array ใหม่เพื่อเก็บข้อมูลฉบับเต็ม
+        const finalCartForStorage = []; 
 
         for (const itemInCart of cart) {
-            // ดึงข้อมูลสินค้าทั้งหมดจาก DB ไม่ใช่แค่บางส่วน
             const itemResult = await client.query(
-                `SELECT mi.*, c.name_th as category_th, c.name_en as category_en, c.name_km as category_km 
+                `SELECT mi.*, c.name_th as category_th, c.name_en as category_en, c.name_km as category_km, c.name_zh as category_zh 
                  FROM menu_items mi
                  LEFT JOIN categories c ON mi.category_id = c.id
                  WHERE mi.id = $1`, 
@@ -61,15 +65,13 @@ const createOrder = async (req, res, next) => {
             );
 
             if (itemResult.rows.length === 0) throw new Error(`Item with ID ${itemInCart.id} not found.`);
-            
             const dbItem = itemResult.rows[0];
 
             if (dbItem.stock_status === 'out_of_stock') {
                 await client.query('ROLLBACK');
                 client.release();
                 return res.status(409).json({
-                    status: 'error',
-                    message: 'Item is out of stock.',
+                    status: 'error', message: 'Item is out of stock.',
                     errorCode: 'OUT_OF_STOCK',
                     errorDetails: { itemId: dbItem.id, itemName: dbItem.name_th }
                 });
@@ -77,31 +79,42 @@ const createOrder = async (req, res, next) => {
             
             calculatedSubtotal += parseFloat(itemInCart.price) * itemInCart.quantity;
 
-            // สร้าง Object ของสินค้าที่จะบันทึก โดยรวมข้อมูลจาก DB และข้อมูลจากตะกร้า
+            // --- ✨ ส่วนที่แก้ไข: สร้างข้อความ Options แบบหลายภาษา ---
+            let selectedOptionsText = { th: '', en: '', km: '', zh: '' };
+            if (itemInCart.selected_options && itemInCart.selected_options.length > 0) {
+                const labels = {
+                    th: itemInCart.selected_options.map(optId => optionsMap.get(optId)?.label_th || '').filter(Boolean),
+                    en: itemInCart.selected_options.map(optId => optionsMap.get(optId)?.label_en || '').filter(Boolean),
+                    km: itemInCart.selected_options.map(optId => optionsMap.get(optId)?.label_km || '').filter(Boolean),
+                    zh: itemInCart.selected_options.map(optId => optionsMap.get(optId)?.label_zh || '').filter(Boolean),
+                };
+                selectedOptionsText.th = labels.th.join(', ');
+                selectedOptionsText.en = labels.en.join(', ');
+                selectedOptionsText.km = labels.km.join(', ');
+                selectedOptionsText.zh = labels.zh.join(', ');
+            }
+            // ----------------------------------------------------
+
             const fullItemData = {
                 id: dbItem.id,
-                name_th: dbItem.name_th,
-                name_en: dbItem.name_en,
-                name_km: dbItem.name_km, // เพิ่มภาษาเขมร
-                category_th: dbItem.category_th,
-                category_en: dbItem.category_en,
-                category_km: dbItem.category_km, // เพิ่มภาษาเขมร
-                price: parseFloat(itemInCart.price), // ใช้ราคา ณ ตอนที่สั่ง (อาจมีโปรโมชั่น)
+                name_th: dbItem.name_th, name_en: dbItem.name_en, name_km: dbItem.name_km, name_zh: dbItem.name_zh,
+                category_th: dbItem.category_th, category_en: dbItem.category_en, category_km: dbItem.category_km, category_zh: dbItem.category_zh,
+                price: parseFloat(itemInCart.price),
                 quantity: itemInCart.quantity,
-                selected_options: itemInCart.selected_options || [], // เก็บ options ที่เลือก
-                selected_options_text_th: itemInCart.selected_options_text_th || '',
-                selected_options_text_en: itemInCart.selected_options_text_en || '',
-                selected_options_text_km: itemInCart.selected_options_text_km || '' // เพิ่มภาษาเขมร
+                selected_options: itemInCart.selected_options || [],
+                // ✨ ใช้ข้อความที่เพิ่งสร้างขึ้น
+                selected_options_text_th: selectedOptionsText.th,
+                selected_options_text_en: selectedOptionsText.en,
+                selected_options_text_km: selectedOptionsText.km,
+                selected_options_text_zh: selectedOptionsText.zh,
             };
             finalCartForStorage.push(fullItemData);
-
 
             if (dbItem.manage_stock) {
                 const newStock = dbItem.current_stock - itemInCart.quantity;
                 await client.query(`UPDATE menu_items SET current_stock = $1 WHERE id = $2`, [newStock, dbItem.id]);
                 updatedStockItems.push({
-                    id: dbItem.id,
-                    current_stock: newStock,
+                    id: dbItem.id, current_stock: newStock,
                     stock_status: newStock > 0 ? 'in_stock' : 'out_of_stock'
                 });
             }
@@ -112,7 +125,6 @@ const createOrder = async (req, res, next) => {
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
 
-        // แก้ไขให้ใช้ finalCartForStorage ที่มีข้อมูลครบทุกภาษา
         const query = `INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;`;
         const values = [finalTableName, JSON.stringify(finalCartForStorage), subtotal, discountPercentage, discountAmount, finalTotal, specialRequest || '', 'Pending', isTakeaway, discountedByUser];
         const result = await client.query(query, values);
@@ -120,13 +132,10 @@ const createOrder = async (req, res, next) => {
         await client.query('COMMIT');
         
         const newOrder = result.rows[0];
-        
         req.broadcast({ type: 'newOrder', order: newOrder });
-
         if (updatedStockItems.length > 0) {
             req.broadcast({ type: 'stockUpdate', payload: updatedStockItems });
         }
-
         res.status(201).json({ status: 'success', data: newOrder });
 
     } catch (error) {
