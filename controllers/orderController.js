@@ -74,12 +74,17 @@ const createOrder = async (req, res, next) => {
             
             calculatedSubtotal += parseFloat(itemInCart.price) * itemInCart.quantity;
 
-            // --- ✨✨✨ นี่คือส่วนที่แก้ไข Logic ใหม่ทั้งหมด ✨✨✨ ---
+            // --- ✨✨✨ [START] ส่วนที่แก้ไขปัญหา ✨✨✨ ---
             let selectedOptionsText = { th: '', en: '', km: '', zh: '' };
             if (itemInCart.selected_options && itemInCart.selected_options.length > 0) {
-                // เปลี่ยนมา query หา options เฉพาะ ID ที่ส่งมาในตะกร้า
+                
+                // [แก้ไข] 1. ดึงเฉพาะ id ออกมาจาก array of objects ก่อน เพื่อความแน่นอน
+                const optionIds = itemInCart.selected_options.map(opt => typeof opt === 'object' ? opt.id : opt);
+
                 const optionsQuery = 'SELECT label_th, label_en, label_km, label_zh FROM menu_options WHERE id = ANY($1::uuid[])';
-                const optionsResult = await client.query(optionsQuery, [itemInCart.selected_options]);
+                
+                // [แก้ไข] 2. ใช้ optionIds ที่เราเตรียมไว้แล้วในการ query
+                const optionsResult = await client.query(optionsQuery, [optionIds]);
                 
                 if (optionsResult.rows.length > 0) {
                     selectedOptionsText.th = optionsResult.rows.map(o => o.label_th).filter(Boolean).join(', ');
@@ -88,7 +93,7 @@ const createOrder = async (req, res, next) => {
                     selectedOptionsText.zh = optionsResult.rows.map(o => o.label_zh).filter(Boolean).join(', ');
                 }
             }
-            // ----------------------------------------------------
+            // --- ✨✨✨ [END] สิ้นสุดส่วนที่แก้ไข ✨✨✨ ---
 
             const fullItemData = {
                 id: dbItem.id,
