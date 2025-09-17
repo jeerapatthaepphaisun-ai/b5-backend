@@ -10,10 +10,9 @@ const createOrder = async (req, res, next) => {
         const { cart, tableNumber, specialRequest, isTakeaway, orderSource, discountPercentage = 0 } = req.body;
         if (!cart || cart.length === 0) return res.status(400).json({ status: 'error', message: 'Cart is empty' });
 
-        // --- ✨ ส่วนที่แก้ไข: ดึงข้อมูล Options ทั้งหมดมารอไว้ ---
+        // --- ดึงข้อมูล Options ทั้งหมดมารอไว้ ---
         const allOptionsResult = await client.query('SELECT id, label_th, label_en, label_km, label_zh FROM menu_options');
         const optionsMap = new Map(allOptionsResult.rows.map(opt => [opt.id, opt]));
-        // ----------------------------------------------------
 
         let discountedByUser = null;
         if (discountPercentage > 0) {
@@ -79,7 +78,7 @@ const createOrder = async (req, res, next) => {
             
             calculatedSubtotal += parseFloat(itemInCart.price) * itemInCart.quantity;
 
-            // --- ✨ ส่วนที่แก้ไข: สร้างข้อความ Options แบบหลายภาษา ---
+            // --- สร้างข้อความ Options แบบหลายภาษา ---
             let selectedOptionsText = { th: '', en: '', km: '', zh: '' };
             if (itemInCart.selected_options && itemInCart.selected_options.length > 0) {
                 const labels = {
@@ -93,8 +92,8 @@ const createOrder = async (req, res, next) => {
                 selectedOptionsText.km = labels.km.join(', ');
                 selectedOptionsText.zh = labels.zh.join(', ');
             }
-            // ----------------------------------------------------
-
+            
+            // --- ✨✨✨ นี่คือจุดที่แก้ไขข้อผิดพลาด ✨✨✨ ---
             const fullItemData = {
                 id: dbItem.id,
                 name_th: dbItem.name_th, name_en: dbItem.name_en, name_km: dbItem.name_km, name_zh: dbItem.name_zh,
@@ -102,12 +101,14 @@ const createOrder = async (req, res, next) => {
                 price: parseFloat(itemInCart.price),
                 quantity: itemInCart.quantity,
                 selected_options: itemInCart.selected_options || [],
-                // ✨ ใช้ข้อความที่เพิ่งสร้างขึ้น
+                // แก้ไขให้ใช้ข้อความที่เพิ่งสร้างขึ้นจาก selectedOptionsText
                 selected_options_text_th: selectedOptionsText.th,
                 selected_options_text_en: selectedOptionsText.en,
                 selected_options_text_km: selectedOptionsText.km,
                 selected_options_text_zh: selectedOptionsText.zh,
             };
+            // ----------------------------------------------------
+
             finalCartForStorage.push(fullItemData);
 
             if (dbItem.manage_stock) {
