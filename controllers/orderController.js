@@ -2,6 +2,7 @@ const pool = require('../db');
 
 // POST /api/orders
 const createOrder = async (req, res, next) => {
+    console.log("Received cart data:", JSON.stringify(req.body.cart, null, 2)); // Debug log
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -9,11 +10,7 @@ const createOrder = async (req, res, next) => {
 
         const { cart, tableNumber, specialRequest, isTakeaway, orderSource, discountPercentage = 0 } = req.body;
         if (!cart || cart.length === 0) return res.status(400).json({ status: 'error', message: 'Cart is empty' });
-
-        // --- ดึงข้อมูล Options ทั้งหมดมารอไว้ ---
-        const allOptionsResult = await client.query('SELECT id, label_th, label_en, label_km, label_zh FROM menu_options');
-        const optionsMap = new Map(allOptionsResult.rows.map(opt => [opt.id, opt]));
-
+        
         let discountedByUser = null;
         if (discountPercentage > 0) {
             if (!req.user) return res.status(401).send('Unauthorized: A login is required to apply discounts.');
@@ -21,7 +18,7 @@ const createOrder = async (req, res, next) => {
         }
 
         let finalTableName;
-        // ... (ส่วน Logic การหาชื่อโต๊ะยังคงเหมือนเดิม) ...
+        // Business logic for table name assignment (no changes needed here)
         if (orderSource === 'bar') {
             const lastBarOrderQuery = `SELECT table_name FROM orders WHERE table_name LIKE 'Bar-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE ORDER BY created_at DESC LIMIT 1;`;
             const lastBarResult = await client.query(lastBarOrderQuery);
@@ -71,29 +68,28 @@ const createOrder = async (req, res, next) => {
                 client.release();
                 return res.status(409).json({
                     status: 'error', message: 'Item is out of stock.',
-                    errorCode: 'OUT_OF_STOCK',
-                    errorDetails: { itemId: dbItem.id, itemName: dbItem.name_th }
+                    errorCode: 'OUT_OF_STOCK', errorDetails: { itemId: dbItem.id, itemName: dbItem.name_th }
                 });
             }
             
             calculatedSubtotal += parseFloat(itemInCart.price) * itemInCart.quantity;
 
-            // --- สร้างข้อความ Options แบบหลายภาษา ---
+            // --- ✨✨✨ นี่คือส่วนที่แก้ไข Logic ใหม่ทั้งหมด ✨✨✨ ---
             let selectedOptionsText = { th: '', en: '', km: '', zh: '' };
             if (itemInCart.selected_options && itemInCart.selected_options.length > 0) {
-                const labels = {
-                    th: itemInCart.selected_options.map(optId => optionsMap.get(optId)?.label_th || '').filter(Boolean),
-                    en: itemInCart.selected_options.map(optId => optionsMap.get(optId)?.label_en || '').filter(Boolean),
-                    km: itemInCart.selected_options.map(optId => optionsMap.get(optId)?.label_km || '').filter(Boolean),
-                    zh: itemInCart.selected_options.map(optId => optionsMap.get(optId)?.label_zh || '').filter(Boolean),
-                };
-                selectedOptionsText.th = labels.th.join(', ');
-                selectedOptionsText.en = labels.en.join(', ');
-                selectedOptionsText.km = labels.km.join(', ');
-                selectedOptionsText.zh = labels.zh.join(', ');
+                // เปลี่ยนมา query หา options เฉพาะ ID ที่ส่งมาในตะกร้า
+                const optionsQuery = 'SELECT label_th, label_en, label_km, label_zh FROM menu_options WHERE id = ANY($1::uuid[])';
+                const optionsResult = await client.query(optionsQuery, [itemInCart.selected_options]);
+                
+                if (optionsResult.rows.length > 0) {
+                    selectedOptionsText.th = optionsResult.rows.map(o => o.label_th).filter(Boolean).join(', ');
+                    selectedOptionsText.en = optionsResult.rows.map(o => o.label_en).filter(Boolean).join(', ');
+                    selectedOptionsText.km = optionsResult.rows.map(o => o.label_km).filter(Boolean).join(', ');
+                    selectedOptionsText.zh = optionsResult.rows.map(o => o.label_zh).filter(Boolean).join(', ');
+                }
             }
-            
-            // --- ✨✨✨ นี่คือจุดที่แก้ไขข้อผิดพลาด ✨✨✨ ---
+            // ----------------------------------------------------
+
             const fullItemData = {
                 id: dbItem.id,
                 name_th: dbItem.name_th, name_en: dbItem.name_en, name_km: dbItem.name_km, name_zh: dbItem.name_zh,
@@ -101,22 +97,19 @@ const createOrder = async (req, res, next) => {
                 price: parseFloat(itemInCart.price),
                 quantity: itemInCart.quantity,
                 selected_options: itemInCart.selected_options || [],
-                // แก้ไขให้ใช้ข้อความที่เพิ่งสร้างขึ้นจาก selectedOptionsText
                 selected_options_text_th: selectedOptionsText.th,
                 selected_options_text_en: selectedOptionsText.en,
                 selected_options_text_km: selectedOptionsText.km,
                 selected_options_text_zh: selectedOptionsText.zh,
             };
-            // ----------------------------------------------------
-
+            
             finalCartForStorage.push(fullItemData);
 
             if (dbItem.manage_stock) {
                 const newStock = dbItem.current_stock - itemInCart.quantity;
                 await client.query(`UPDATE menu_items SET current_stock = $1 WHERE id = $2`, [newStock, dbItem.id]);
                 updatedStockItems.push({
-                    id: dbItem.id, current_stock: newStock,
-                    stock_status: newStock > 0 ? 'in_stock' : 'out_of_stock'
+                    id: dbItem.id, current_stock: newStock, stock_status: newStock > 0 ? 'in_stock' : 'out_of_stock'
                 });
             }
         }
