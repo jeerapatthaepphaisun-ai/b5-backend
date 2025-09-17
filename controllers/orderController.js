@@ -47,34 +47,60 @@ const createOrder = async (req, res, next) => {
         }
         
         let calculatedSubtotal = 0;
-        const updatedStockItems = []; 
+        const updatedStockItems = [];
+        const finalCartForStorage = []; // สร้าง Array ใหม่เพื่อเก็บข้อมูลฉบับเต็ม
 
-        for (const item of cart) {
-            const itemResult = await client.query('SELECT price, stock_status, name_th, current_stock, manage_stock FROM menu_items WHERE id = $1', [item.productId || item.id]);
-            if (itemResult.rows.length === 0) throw new Error(`Item with ID ${item.id} not found.`);
+        for (const itemInCart of cart) {
+            // ดึงข้อมูลสินค้าทั้งหมดจาก DB ไม่ใช่แค่บางส่วน
+            const itemResult = await client.query(
+                `SELECT mi.*, c.name_th as category_th, c.name_en as category_en, c.name_km as category_km 
+                 FROM menu_items mi
+                 LEFT JOIN categories c ON mi.category_id = c.id
+                 WHERE mi.id = $1`, 
+                [itemInCart.productId || itemInCart.id]
+            );
+
+            if (itemResult.rows.length === 0) throw new Error(`Item with ID ${itemInCart.id} not found.`);
             
-            if (itemResult.rows[0].stock_status === 'out_of_stock') {
+            const dbItem = itemResult.rows[0];
+
+            if (dbItem.stock_status === 'out_of_stock') {
                 await client.query('ROLLBACK');
                 client.release();
                 return res.status(409).json({
                     status: 'error',
                     message: 'Item is out of stock.',
                     errorCode: 'OUT_OF_STOCK',
-                    errorDetails: {
-                        itemId: item.productId || item.id,
-                        itemName: itemResult.rows[0].name_th
-                    }
+                    errorDetails: { itemId: dbItem.id, itemName: dbItem.name_th }
                 });
             }
             
-            calculatedSubtotal += parseFloat(item.price) * item.quantity;
+            calculatedSubtotal += parseFloat(itemInCart.price) * itemInCart.quantity;
 
-            if (itemResult.rows[0].manage_stock) {
-                const newStock = itemResult.rows[0].current_stock - item.quantity;
-                await client.query(`UPDATE menu_items SET current_stock = $1 WHERE id = $2`, [newStock, item.productId || item.id]);
-                
+            // สร้าง Object ของสินค้าที่จะบันทึก โดยรวมข้อมูลจาก DB และข้อมูลจากตะกร้า
+            const fullItemData = {
+                id: dbItem.id,
+                name_th: dbItem.name_th,
+                name_en: dbItem.name_en,
+                name_km: dbItem.name_km, // เพิ่มภาษาเขมร
+                category_th: dbItem.category_th,
+                category_en: dbItem.category_en,
+                category_km: dbItem.category_km, // เพิ่มภาษาเขมร
+                price: parseFloat(itemInCart.price), // ใช้ราคา ณ ตอนที่สั่ง (อาจมีโปรโมชั่น)
+                quantity: itemInCart.quantity,
+                selected_options: itemInCart.selected_options || [], // เก็บ options ที่เลือก
+                selected_options_text_th: itemInCart.selected_options_text_th || '',
+                selected_options_text_en: itemInCart.selected_options_text_en || '',
+                selected_options_text_km: itemInCart.selected_options_text_km || '' // เพิ่มภาษาเขมร
+            };
+            finalCartForStorage.push(fullItemData);
+
+
+            if (dbItem.manage_stock) {
+                const newStock = dbItem.current_stock - itemInCart.quantity;
+                await client.query(`UPDATE menu_items SET current_stock = $1 WHERE id = $2`, [newStock, dbItem.id]);
                 updatedStockItems.push({
-                    id: item.productId || item.id,
+                    id: dbItem.id,
                     current_stock: newStock,
                     stock_status: newStock > 0 ? 'in_stock' : 'out_of_stock'
                 });
@@ -86,8 +112,9 @@ const createOrder = async (req, res, next) => {
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
 
+        // แก้ไขให้ใช้ finalCartForStorage ที่มีข้อมูลครบทุกภาษา
         const query = `INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;`;
-        const values = [finalTableName, JSON.stringify(cart), subtotal, discountPercentage, discountAmount, finalTotal, specialRequest || '', 'Pending', isTakeaway, discountedByUser];
+        const values = [finalTableName, JSON.stringify(finalCartForStorage), subtotal, discountPercentage, discountAmount, finalTotal, specialRequest || '', 'Pending', isTakeaway, discountedByUser];
         const result = await client.query(query, values);
 
         await client.query('COMMIT');
@@ -185,22 +212,18 @@ const updateOrderStatus = async (req, res, next) => {
 // GET /api/kds/orders (ฟังก์ชันใหม่สำหรับ KDS โดยเฉพาะ)
 const getKdsOrders = async (req, res, next) => {
     try {
-        // 1. รับชื่อ station จาก URL (เช่น ?station=kitchen)
         const { station } = req.query;
         if (!station) {
             return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station (kitchen หรือ bar)' });
         }
 
-        // 2. ค้นหาหมวดหมู่ทั้งหมดที่อยู่ในความรับผิดชอบของ station นี้
         const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
         const targetCategories = categoriesResult.rows.map(row => row.name_th);
 
-        // ถ้า station นี้ไม่มีหมวดหมู่ที่ต้องรับผิดชอบ ก็ส่งข้อมูลว่างกลับไป
         if (targetCategories.length === 0) {
             return res.json({ status: 'success', data: [] });
         }
 
-        // 3. ดึงออเดอร์ทั้งหมดที่ยังมีสถานะ "ค้างอยู่" (ยังไม่เสร็จหรือยังไม่จ่ายเงิน)
         const query = `
             SELECT * FROM orders
             WHERE status IN ('Pending', 'Cooking', 'Preparing')
@@ -208,23 +231,18 @@ const getKdsOrders = async (req, res, next) => {
         `;
         const result = await pool.query(query);
         
-        // 4. กรองเฉพาะออเดอร์ที่มีรายการอาหาร/เครื่องดื่มที่ station นี้ต้องทำ
         const filteredOrders = result.rows.map(order => {
-            // กรอง items ในออเดอร์ ให้เหลือแต่รายการที่อยู่ใน targetCategories
             const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
             
-            // ถ้ามีรายการที่เกี่ยวข้องอย่างน้อย 1 รายการ ให้ส่งคืนออเดอร์นั้นไป
             if (relevantItems.length > 0) {
                 return { ...order, items: relevantItems };
             }
             return null;
-        }).filter(Boolean); // .filter(Boolean) คือเทคนิคการลบค่า null ออกจาก array
+        }).filter(Boolean);
 
-        // 5. ส่งข้อมูลออเดอร์ที่กรองแล้วกลับไปให้ KDS Frontend
         res.json({ status: 'success', data: filteredOrders });
 
     } catch (error) {
-        // หากเกิดข้อผิดพลาด ให้ส่งต่อไปยัง error handler
         next(error);
     }
 };
@@ -233,5 +251,5 @@ module.exports = {
     createOrder,
     getOrdersByStation,
     updateOrderStatus,
-    getKdsOrders // << เพิ่มบรรทัดนี้เข้าไป
+    getKdsOrders
 };
