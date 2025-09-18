@@ -110,7 +110,7 @@ const getTableStatus = async (req, res, next) => {
     try {
         const { tableName } = req.params;
         const result = await pool.query(
-            "SELECT * FROM orders WHERE table_name = $1 AND status != 'Paid' ORDER BY created_at ASC",
+            "SELECT * FROM orders WHERE table_name = $1 AND status != 'Paid' ORDER BY created_at DESC",
             [tableName]
         );
         res.json({ status: 'success', data: result.rows });
