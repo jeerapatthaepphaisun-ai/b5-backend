@@ -1,3 +1,5 @@
+// controllers/utilityController.js
+
 // POST /api/utils/upload-image
 const uploadImage = async (req, res, next) => {
     try {
@@ -32,6 +34,13 @@ const uploadImage = async (req, res, next) => {
     }
 };
 
+// GET /api/utils/health
+const healthCheck = (req, res) => {
+    // ฟังก์ชันนี้จะตอบกลับทันทีโดยไม่เชื่อมต่อฐานข้อมูล
+    res.status(200).json({ status: 'success', message: 'Server is awake and healthy.' });
+};
+
 module.exports = {
-    uploadImage
+    uploadImage,
+    healthCheck
 };
