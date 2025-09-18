@@ -74,16 +74,13 @@ const createOrder = async (req, res, next) => {
             
             calculatedSubtotal += parseFloat(itemInCart.price) * itemInCart.quantity;
 
-            // --- ✨✨✨ [START] ส่วนที่แก้ไขปัญหา ✨✨✨ ---
             let selectedOptionsText = { th: '', en: '', km: '', zh: '' };
             if (itemInCart.selected_options && itemInCart.selected_options.length > 0) {
                 
-                // [แก้ไข] 1. ดึงเฉพาะ id ออกมาจาก array of objects ก่อน เพื่อความแน่นอน
                 const optionIds = itemInCart.selected_options.map(opt => typeof opt === 'object' ? opt.id : opt);
 
                 const optionsQuery = 'SELECT label_th, label_en, label_km, label_zh FROM menu_options WHERE id = ANY($1::uuid[])';
                 
-                // [แก้ไข] 2. ใช้ optionIds ที่เราเตรียมไว้แล้วในการ query
                 const optionsResult = await client.query(optionsQuery, [optionIds]);
                 
                 if (optionsResult.rows.length > 0) {
@@ -93,7 +90,6 @@ const createOrder = async (req, res, next) => {
                     selectedOptionsText.zh = optionsResult.rows.map(o => o.label_zh).filter(Boolean).join(', ');
                 }
             }
-            // --- ✨✨✨ [END] สิ้นสุดส่วนที่แก้ไข ✨✨✨ ---
 
             const fullItemData = {
                 id: dbItem.id,
@@ -178,7 +174,17 @@ const updateOrderStatus = async (req, res, next) => {
         const { orderId, newStatus, station } = req.body;
 
         if (newStatus !== 'Serving') {
-            const result = await client.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [newStatus, orderId]);
+            let updateQuery = 'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *';
+            const queryParams = [newStatus, orderId];
+
+            // If reverting to "Cooking" (Undo), also remove the station from completed_stations.
+            if (newStatus === 'Cooking' && station) {
+                updateQuery = 'UPDATE orders SET status = $1, completed_stations = completed_stations - $3 WHERE id = $2 RETURNING *';
+                queryParams.push(station);
+            }
+            
+            const result = await client.query(updateQuery, queryParams);
+            
             if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Order not found' });
             req.broadcast({ type: 'orderStatusUpdate', order: result.rows[0] });
             await client.query('COMMIT');
