@@ -58,14 +58,13 @@ const createOrder = async (req, res, next) => {
                  FROM menu_items mi
                  LEFT JOIN categories c ON mi.category_id = c.id
                  WHERE mi.id = $1
-                 FOR UPDATE`, // <-- 1. เพิ่ม FOR UPDATE เพื่อล็อคแถวข้อมูล
+                 FOR UPDATE OF mi`, // ✨ แก้ไขโดยระบุตาราง (mi คือ menu_items)
                 [itemInCart.productId || itemInCart.id]
             );
 
             if (itemResult.rows.length === 0) throw new Error(`Item with ID ${itemInCart.id} not found.`);
             const dbItem = itemResult.rows[0];
 
-            // 2. เปลี่ยนมาเช็คจำนวนสต็อกโดยตรง เพื่อความแม่นยำสูงสุด
             if (dbItem.manage_stock && dbItem.current_stock < itemInCart.quantity) {
                 await client.query('ROLLBACK');
                 client.release();
@@ -289,7 +288,6 @@ const undoPayment = async (req, res, next) => {
             [orderIdsToUndo]
         );
 
-        // ✨ แก้ไขเงื่อนไขให้ครอบคลุม Bar- ด้วย
         if (!tableName.startsWith('Takeaway-') && !tableName.startsWith('Bar-')) {
              await client.query(
                 "UPDATE tables SET status = 'Occupied' WHERE name = $1",
@@ -310,7 +308,6 @@ const undoPayment = async (req, res, next) => {
         client.release();
     }
 };
-
 
 module.exports = {
     createOrder,
