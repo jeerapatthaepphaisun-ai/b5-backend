@@ -15,11 +15,29 @@ const PORT = process.env.PORT || 3000;
 // =================================================================
 // --- Middleware & Configs ---
 // =================================================================
+
+// ✨ --- START: ส่วนที่แก้ไข CORS --- ✨
+const allowedOrigins = [
+  process.env.FRONTEND_URL,   // URL จริงจากไฟล์ .env
+  'http://localhost:5173',      // สำหรับตอนพัฒนาด้วย Vite dev server
+  'http://127.0.0.1:5500',     // สำหรับตอนเปิดด้วย Live Server
+  // เพิ่ม URL อื่นๆ ที่ได้รับอนุญาตได้ที่นี่
+];
+
 app.use(cors({
-  origin: "*",
+  origin: function (origin, callback) {
+    // อนุญาตถ้า origin อยู่ในลิสต์ allowedOrigins หรือถ้าไม่มี origin (เช่น Postman, Mobile App)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: "GET,POST,PUT,DELETE,OPTIONS",
   allowedHeaders: "Content-Type,Authorization"
 }));
+// ✨ --- END: ส่วนที่แก้ไข CORS --- ✨
+
 app.use(express.json());
 
 // Trust proxy for deployment environments like Render.com
@@ -61,7 +79,7 @@ const userRoutes = require('./routes/userRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const utilityRoutes = require('./routes/utilityRoutes');
 const takeawayRoutes = require('./routes/takeawayRoutes');
-const optionRoutes = require('./routes/optionRoutes'); // ✨ เพิ่มบรรทัดนี้
+const optionRoutes = require('./routes/optionRoutes');
 
 // =================================================================
 // --- ลงทะเบียน Routes (Use Routes) ---
@@ -77,7 +95,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/utils', utilityRoutes); // สำหรับ /upload-image และอื่นๆ
 app.use('/api/takeaway-orders', takeawayRoutes);
-app.use('/api/options', optionRoutes); // ✨ เพิ่มบรรทัดนี้
+app.use('/api/options', optionRoutes);
 
 // =================================================================
 // --- Error Handler ---
