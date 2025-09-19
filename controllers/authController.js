@@ -21,9 +21,6 @@ const login = async (req, res, next) => {
             return res.status(400).json({ status: 'error', message: 'กรุณากรอก Username และ Password' });
         }
 
-        // --- จุดที่แก้ไข ---
-        // เปลี่ยนจาก SELECT * เป็นการระบุคอลัมน์ที่ต้องการโดยตรง
-        // เพื่อแก้ปัญหา 500 Internal Server Error และเพิ่มความปลอดภัย
         const result = await pool.query(
             'SELECT username, role, password_hash FROM users WHERE LOWER(username) = LOWER($1)',
             [username]
@@ -33,10 +30,8 @@ const login = async (req, res, next) => {
         if (user) {
             const match = await bcrypt.compare(password, user.password_hash);
             if (match) {
-                // ตรวจสอบ Role ที่มีสิทธิ์เข้าใช้งานระบบ Cashier
-                if (user.role !== 'admin' && user.role !== 'cashier') {
-                    return res.status(403).json({ status: 'error', message: 'คุณไม่มีสิทธิ์เข้าใช้งานระบบนี้' });
-                }
+                // ✨ --- ลบเงื่อนไขการเช็ค Role ที่เข้มงวดเกินไปออก --- ✨
+                // การตรวจสอบสิทธิ์จะถูกจัดการโดย Middleware (authenticateToken) ในแต่ละ Route แทน
                 
                 const payload = { username: user.username, role: user.role };
                 const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
