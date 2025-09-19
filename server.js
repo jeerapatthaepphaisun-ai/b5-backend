@@ -16,13 +16,16 @@ const PORT = process.env.PORT || 3000;
 // --- Middleware & Configs ---
 // =================================================================
 
-// ✨ --- START: ส่วนที่แก้ไข CORS --- ✨
+// ✨ --- START: ส่วนที่แก้ไข CORS ให้รองรับทุก URL --- ✨
 const allowedOrigins = [
-  process.env.FRONTEND_URL,   // URL จริงจากไฟล์ .env
-  'http://localhost:5173',      // สำหรับตอนพัฒนาด้วย Vite dev server
-  'http://127.0.0.1:5500',     // สำหรับตอนเปิดด้วย Live Server
-  // เพิ่ม URL อื่นๆ ที่ได้รับอนุญาตได้ที่นี่
-];
+  process.env.FRONTEND_CASHIER_URL,
+  process.env.FRONTEND_MENU_URL,
+  process.env.FRONTEND_KDS_URL,
+  process.env.FRONTEND_ADMIN_URL,
+  process.env.FRONTEND_CAFE_URL,
+  'http://localhost:5173',            // สำหรับตอนพัฒนาด้วย Vite
+  'http://127.0.0.1:5500',            // สำหรับตอนเปิดด้วย Live Server
+].filter(Boolean); // .filter(Boolean) จะช่วยกรองค่าที่อาจจะยังไม่ได้ตั้ง ออกไป
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -30,13 +33,14 @@ app.use(cors({
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error(`Origin '${origin}' not allowed by CORS`));
     }
   },
   methods: "GET,POST,PUT,DELETE,OPTIONS",
   allowedHeaders: "Content-Type,Authorization"
 }));
 // ✨ --- END: ส่วนที่แก้ไข CORS --- ✨
+
 
 app.use(express.json());
 
