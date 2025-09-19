@@ -1,8 +1,10 @@
+// controllers/orderController.js
+
 const pool = require('../db');
 
 // POST /api/orders
 const createOrder = async (req, res, next) => {
-    console.log("Received cart data:", JSON.stringify(req.body.cart, null, 2)); // Debug log
+    console.log("Received cart data:", JSON.stringify(req.body.cart, null, 2));
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -18,7 +20,6 @@ const createOrder = async (req, res, next) => {
         }
 
         let finalTableName;
-        // Business logic for table name assignment (no changes needed here)
         if (orderSource === 'bar') {
             const lastBarOrderQuery = `SELECT table_name FROM orders WHERE table_name LIKE 'Bar-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = CURRENT_DATE ORDER BY created_at DESC LIMIT 1;`;
             const lastBarResult = await client.query(lastBarOrderQuery);
@@ -56,19 +57,23 @@ const createOrder = async (req, res, next) => {
                 `SELECT mi.*, c.name_th as category_th, c.name_en as category_en, c.name_km as category_km, c.name_zh as category_zh 
                  FROM menu_items mi
                  LEFT JOIN categories c ON mi.category_id = c.id
-                 WHERE mi.id = $1`, 
+                 WHERE mi.id = $1
+                 FOR UPDATE`, // <-- 1. เพิ่ม FOR UPDATE เพื่อล็อคแถวข้อมูล
                 [itemInCart.productId || itemInCart.id]
             );
 
             if (itemResult.rows.length === 0) throw new Error(`Item with ID ${itemInCart.id} not found.`);
             const dbItem = itemResult.rows[0];
 
-            if (dbItem.stock_status === 'out_of_stock') {
+            // 2. เปลี่ยนมาเช็คจำนวนสต็อกโดยตรง เพื่อความแม่นยำสูงสุด
+            if (dbItem.manage_stock && dbItem.current_stock < itemInCart.quantity) {
                 await client.query('ROLLBACK');
                 client.release();
                 return res.status(409).json({
-                    status: 'error', message: 'Item is out of stock.',
-                    errorCode: 'OUT_OF_STOCK', errorDetails: { itemId: dbItem.id, itemName: dbItem.name_th }
+                    status: 'error',
+                    message: `สินค้า '${dbItem.name_th}' มีสต็อกไม่เพียงพอ (เหลือ ${dbItem.current_stock} ชิ้น)`,
+                    errorCode: 'OUT_OF_STOCK',
+                    errorDetails: { itemId: dbItem.id, itemName: dbItem.name_th, stock: dbItem.current_stock }
                 });
             }
             
@@ -76,11 +81,8 @@ const createOrder = async (req, res, next) => {
 
             let selectedOptionsText = { th: '', en: '', km: '', zh: '' };
             if (itemInCart.selected_options && itemInCart.selected_options.length > 0) {
-                
                 const optionIds = itemInCart.selected_options.map(opt => typeof opt === 'object' ? opt.id : opt);
-
                 const optionsQuery = 'SELECT label_th, label_en, label_km, label_zh FROM menu_options WHERE id = ANY($1::uuid[])';
-                
                 const optionsResult = await client.query(optionsQuery, [optionIds]);
                 
                 if (optionsResult.rows.length > 0) {
@@ -141,7 +143,6 @@ const createOrder = async (req, res, next) => {
     }
 };
 
-// GET /api/orders
 const getOrdersByStation = async (req, res, next) => {
     try {
         const { station } = req.query;
@@ -166,7 +167,6 @@ const getOrdersByStation = async (req, res, next) => {
     }
 };
 
-// POST /api/orders/update-status
 const updateOrderStatus = async (req, res, next) => {
     const client = await pool.connect();
     try {
@@ -222,7 +222,6 @@ const updateOrderStatus = async (req, res, next) => {
     }
 };
 
-// GET /api/kds/orders
 const getKdsOrders = async (req, res, next) => {
     try {
         const { station } = req.query;
@@ -290,8 +289,8 @@ const undoPayment = async (req, res, next) => {
             [orderIdsToUndo]
         );
 
-        // Only update table status if it's a dine-in table (doesn't start with Takeaway-)
-        if (!tableName.startsWith('Takeaway-')) {
+        // ✨ แก้ไขเงื่อนไขให้ครอบคลุม Bar- ด้วย
+        if (!tableName.startsWith('Takeaway-') && !tableName.startsWith('Bar-')) {
              await client.query(
                 "UPDATE tables SET status = 'Occupied' WHERE name = $1",
                 [tableName]
