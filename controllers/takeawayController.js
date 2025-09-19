@@ -20,7 +20,6 @@ const getTakeawayOrders = async (req, res, next) => {
                 ) as orders_data
             FROM orders 
             WHERE 
-                -- ✨ แก้ไขเงื่อนไขตรงนี้: ลบ OR table_name LIKE 'Bar-%' ออกไป
                 table_name LIKE 'Takeaway-%'
                 AND status != 'Paid' 
             GROUP BY table_name, status
@@ -28,11 +27,15 @@ const getTakeawayOrders = async (req, res, next) => {
         `;
         const result = await pool.query(query);
 
-        // จัดรูปแบบข้อมูลให้เหมือนกับข้อมูลโต๊ะ เพื่อให้ Frontend ใช้งานได้ง่าย
         const occupiedTakeaways = result.rows.reduce((acc, row) => {
+            // --- ✨ ส่วนที่แก้ไขใหม่ทั้งหมด ---
+            const VAT_RATE = parseFloat(process.env.VAT_RATE) || 0.07; // ดึงค่า VAT จาก .env
+
             const subtotal = row.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
             const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
-            const total = row.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
+            const totalAfterDiscount = subtotal - discountAmount;
+            const vatAmount = totalAfterDiscount * VAT_RATE;
+            const grandTotal = totalAfterDiscount + vatAmount;
             const discountPercentage = row.orders_data[0]?.discount_percentage || 0;
 
             acc[row.table_name] = {
@@ -41,7 +44,8 @@ const getTakeawayOrders = async (req, res, next) => {
                 status: row.status,
                 subtotal: subtotal,
                 discountAmount: discountAmount,
-                total: total,
+                vatAmount: vatAmount,       // <-- เพิ่ม vatAmount
+                total: grandTotal,          // <-- total คือยอดสุทธิสุดท้าย
                 discountPercentage: discountPercentage
             };
             return acc;
@@ -56,20 +60,15 @@ const getTakeawayOrders = async (req, res, next) => {
 // POST /api/takeaway-orders/clear
 const clearTakeawayOrder = async (req, res, next) => {
     try {
-        const { takeawayId } = req.body; // e.g., "Takeaway-1"
+        const { takeawayId } = req.body;
         if (!takeawayId) {
             return res.status(400).json({ status: 'error', message: 'Takeaway ID is required.' });
         }
-
-        // โค้ดส่วนนี้จะทำงานได้กับทั้ง Takeaway และ Bar แต่เนื่องจาก getTakeawayOrders ถูกแก้แล้ว
-        // หน้าแคชเชียร์จะไม่มีปุ่มให้กดเคลียร์ออเดอร์ของ Bar อีกต่อไป
         await pool.query(
             "UPDATE orders SET status = 'Paid' WHERE table_name = $1 AND status != 'Paid'",
             [takeawayId]
         );
-        
         req.broadcast({ type: 'takeawayCleared', takeawayId: takeawayId });
-
         res.json({ status: 'success', message: `Order ${takeawayId} cleared successfully.` });
     } catch (error) {
         next(error);

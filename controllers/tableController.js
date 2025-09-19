@@ -1,3 +1,5 @@
+// controllers/tableController.js
+
 const pool = require('../db');
 const { validationResult } = require('express-validator');
 
@@ -15,19 +17,18 @@ const getTableData = async (req, res, next) => {
         `;
         const result = await pool.query(query);
 
-        // Processing logic to aggregate data for occupied tables
         const allTableNames = result.rows.map(r => r.table_name);
         const occupiedTablesData = result.rows.reduce((acc, row) => {
             if (row.orders_data) {
+                // --- ✨ ส่วนที่แก้ไขใหม่ทั้งหมด ---
+                const VAT_RATE = parseFloat(process.env.VAT_RATE) || 0.07; // ดึงค่า VAT จาก .env
+
                 const subtotal = row.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
                 const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
-                const totalAfterDiscount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.total), 0);
+                const totalAfterDiscount = subtotal - discountAmount;
+                const vatAmount = totalAfterDiscount * VAT_RATE; // คำนวณยอด VAT แยก
+                const grandTotal = totalAfterDiscount + vatAmount; // คำนวณยอดสุทธิ
                 const discountPercentage = row.orders_data[0]?.discount_percentage || 0;
-
-                // --- ✨ ส่วนที่เพิ่มเข้ามาเพื่อคำนวณ VAT ---
-                const VAT_RATE = 0.07; // 7% VAT
-                const finalTotalWithVAT = totalAfterDiscount * (1 + VAT_RATE);
-                // ------------------------------------------
 
                 acc[row.table_name] = {
                     tableName: row.table_name,
@@ -35,7 +36,8 @@ const getTableData = async (req, res, next) => {
                     status: row.table_status,
                     subtotal: subtotal,
                     discountAmount: discountAmount,
-                    total: finalTotalWithVAT, // ✨ แก้ไขให้ใช้ยอดสุทธิที่รวม VAT แล้ว
+                    vatAmount: vatAmount,       // <-- เพิ่ม vatAmount
+                    total: grandTotal,          // <-- total คือยอดสุทธิสุดท้าย
                     discountPercentage: discountPercentage
                 };
             }
