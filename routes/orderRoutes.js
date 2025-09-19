@@ -9,12 +9,13 @@ router.post('/', decodeTokenOptional, orderController.createOrder);
 // POST /api/orders/update-status (อัปเดตสถานะ)
 router.post('/update-status', authenticateToken('kitchen', 'bar', 'admin'), orderController.updateOrderStatus);
 
-// GET /api/orders (เส้นทางเก่าสำหรับ KDS - เราจะเปลี่ยนไปใช้เส้นทางใหม่)
+// GET /api/orders (เส้นทางเก่าสำหรับ KDS)
 router.get('/', authenticateToken('kitchen', 'bar', 'admin'), orderController.getOrdersByStation);
 
-// ✨ GET /api/orders/kds (เส้นทางใหม่สำหรับ KDS โดยเฉพาะ!) ✨
-// เราจะให้เส้นทางนี้เรียกใช้ฟังก์ชัน getKdsOrders ที่เราสร้างไว้ใน Controller
+// GET /api/orders/kds (เส้นทางใหม่สำหรับ KDS)
 router.get('/kds', authenticateToken('kitchen', 'bar', 'admin'), orderController.getKdsOrders);
 
+// POST /api/orders/undo-payment (Route ใหม่สำหรับ Undo)
+router.post('/undo-payment', authenticateToken('cashier', 'admin'), orderController.undoPayment);
 
 module.exports = router;

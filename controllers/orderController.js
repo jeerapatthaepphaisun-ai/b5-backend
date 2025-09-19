@@ -177,7 +177,6 @@ const updateOrderStatus = async (req, res, next) => {
             let updateQuery = 'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *';
             const queryParams = [newStatus, orderId];
 
-            // If reverting to "Cooking" (Undo), also remove the station from completed_stations.
             if (newStatus === 'Cooking' && station) {
                 updateQuery = 'UPDATE orders SET status = $1, completed_stations = completed_stations - $3 WHERE id = $2 RETURNING *';
                 queryParams.push(station);
@@ -223,7 +222,7 @@ const updateOrderStatus = async (req, res, next) => {
     }
 };
 
-// GET /api/kds/orders (ฟังก์ชันใหม่สำหรับ KDS โดยเฉพาะ)
+// GET /api/kds/orders
 const getKdsOrders = async (req, res, next) => {
     try {
         const { station } = req.query;
@@ -261,9 +260,63 @@ const getKdsOrders = async (req, res, next) => {
     }
 };
 
+const undoPayment = async (req, res, next) => {
+    const { tableName } = req.body;
+    if (!tableName) {
+        return res.status(400).json({ status: 'error', message: 'Table name is required.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const recentPaidOrdersResult = await client.query(
+            `SELECT id FROM orders 
+             WHERE table_name = $1 AND status = 'Paid' 
+             AND updated_at >= NOW() - INTERVAL '2 minutes'
+             ORDER BY updated_at DESC`,
+            [tableName]
+        );
+
+        if (recentPaidOrdersResult.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ status: 'error', message: 'No recent paid order found for this table to undo.' });
+        }
+        
+        const orderIdsToUndo = recentPaidOrdersResult.rows.map(row => row.id);
+
+        await client.query(
+            "UPDATE orders SET status = 'Serving', updated_at = NOW() WHERE id = ANY($1::uuid[])",
+            [orderIdsToUndo]
+        );
+
+        // Only update table status if it's a dine-in table (doesn't start with Takeaway-)
+        if (!tableName.startsWith('Takeaway-')) {
+             await client.query(
+                "UPDATE tables SET status = 'Occupied' WHERE name = $1",
+                [tableName]
+            );
+        }
+
+        await client.query('COMMIT');
+
+        req.broadcast({ type: 'paymentUndone', tableName: tableName });
+
+        res.json({ status: 'success', message: `Payment for table ${tableName} has been undone.` });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        next(error);
+    } finally {
+        client.release();
+    }
+};
+
+
 module.exports = {
     createOrder,
     getOrdersByStation,
     updateOrderStatus,
-    getKdsOrders
+    getKdsOrders,
+    undoPayment
 };
