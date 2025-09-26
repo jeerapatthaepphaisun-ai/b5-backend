@@ -10,7 +10,8 @@ const getMenu = async (req, res, next) => {
             FROM menu_items mi
             LEFT JOIN categories c ON mi.category_id = c.id
         `;
-        let whereClauses = [];
+        // ✨ FIX: เพิ่มเงื่อนไข WHERE เริ่มต้นเพื่อกรองเมนูที่ไม่มีหมวดหมู่ออก
+        let whereClauses = ["mi.category_id IS NOT NULL"]; 
         let queryParams = [];
 
         if (category && category !== 'all') {
@@ -59,7 +60,6 @@ const getMenu = async (req, res, next) => {
             
             const relevantOptionSetIds = [...new Set(menuOptionsLinkResult.rows.map(link => link.option_set_id))];
             
-            // ✨ FIX: ประกาศ optionsMap เป็น object ว่างไว้ก่อนเสมอ
             let optionsMap = {};
 
             if (relevantOptionSetIds.length > 0) {
@@ -68,7 +68,6 @@ const getMenu = async (req, res, next) => {
                     [relevantOptionSetIds]
                 );
                 
-                // เติมข้อมูลเข้าไปใน optionsMap ที่เราสร้างไว้
                 optionsMap = optionsResult.rows.reduce((map, row) => {
                     const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
                     if (!map[option_set_id]) map[option_set_id] = [];
@@ -81,7 +80,6 @@ const getMenu = async (req, res, next) => {
                 }, {});
             }
 
-            // ประกอบข้อมูลกลับเข้าไปใน menuItems (ส่วนนี้จะทำงานได้ปกติแล้ว)
             menuItems = menuItems.map(item => {
                 const optionSetIds = menuOptionsLink[item.id] || [];
                 item.option_groups = optionSetIds.reduce((groups, id) => {
@@ -110,7 +108,8 @@ const getBarMenu = async (req, res, next) => {
     try {
         const { search } = req.query;
         let queryParams = ['bar'];
-        let whereClauses = ["c.station_type = $1"];
+        // ✨ FIX: เพิ่มเงื่อนไข mi.category_id IS NOT NULL ด้วย
+        let whereClauses = ["c.station_type = $1", "mi.category_id IS NOT NULL"];
 
         if (search) {
             queryParams.push(`%${search}%`);
@@ -142,7 +141,6 @@ const getBarMenu = async (req, res, next) => {
             
             const relevantOptionSetIds = [...new Set(menuOptionsLinkResult.rows.map(link => link.option_set_id))];
 
-            // ✨ FIX: ประกาศ optionsMap เป็น object ว่างไว้ก่อนเสมอ
             let optionsMap = {};
 
             if (relevantOptionSetIds.length > 0) {
