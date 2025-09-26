@@ -25,6 +25,7 @@ const allowedOrigins = [
   process.env.FRONTEND_CAFE_URL,
   'http://localhost:5173',            // สำหรับตอนพัฒนาด้วย Vite
   'http://127.0.0.1:5500',            // สำหรับตอนเปิดด้วย Live Server
+  'http://127.0.0.1:5501',            // ✨ เพิ่มบรรทัดนี้: สำหรับ Live Server (Dashboard)
 ].filter(Boolean); // .filter(Boolean) จะช่วยกรองค่าที่อาจจะยังไม่ได้ตั้ง ออกไป
 
 app.use(cors({
