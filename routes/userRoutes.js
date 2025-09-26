@@ -1,3 +1,4 @@
+// routes/userRoutes.js
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
@@ -15,11 +16,20 @@ const updateUserValidation = [
     body('role').isIn(['admin', 'cashier', 'kitchen', 'bar']).withMessage('Invalid role specified')
 ];
 
+// --- เพิ่ม Regex สำหรับตรวจสอบรหัสผ่าน ---
+const passwordComplexityRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+const passwordErrorMessage = 'รหัสผ่านต้องมีอย่างน้อย 8 ตัว, ประกอบด้วยตัวพิมพ์เล็ก, พิมพ์ใหญ่, ตัวเลข, และอักขระพิเศษ (@$!%*?&)';
+
 // Validation for a required password (for creating users)
-const passwordValidation = body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long');
+const passwordValidation = body('password')
+    .isLength({ min: 8 }).withMessage('รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษร')
+    .matches(passwordComplexityRegex).withMessage(passwordErrorMessage);
 
 // Validation for an optional password (for updating users)
-const optionalPasswordValidation = body('password').optional({ checkFalsy: true }).isLength({ min: 6 }).withMessage('Password must be at least 6 characters long');
+const optionalPasswordValidation = body('password')
+    .optional({ checkFalsy: true }) // .optional() ทำให้ field นี้ไม่จำเป็นต้องมีค่า
+    .isLength({ min: 8 }).withMessage('รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษร')
+    .matches(passwordComplexityRegex).withMessage(passwordErrorMessage);
 
 // --- Define Routes ---
 

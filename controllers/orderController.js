@@ -2,6 +2,39 @@
 
 const pool = require('../db');
 
+// --- ฟังก์ชัน Helper กลางสำหรับดึงออเดอร์ตาม Station ---
+const getFilteredOrdersByStation = async (station) => {
+    if (!station) {
+        throw new Error('กรุณาระบุ station (kitchen หรือ bar)');
+    }
+
+    // ดึงชื่อหมวดหมู่ที่ตรงกับ station ที่ระบุ
+    const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
+    const targetCategories = categoriesResult.rows.map(row => row.name_th);
+
+    if (targetCategories.length === 0) {
+        return []; // ถ้าไม่มีหมวดหมู่สำหรับ station นี้ ก็ return ค่าว่างไปเลย
+    }
+
+    // ดึงออเดอร์ที่ยังไม่เสร็จทั้งหมด
+    const query = `SELECT * FROM orders WHERE status IN ('Pending', 'Cooking', 'Preparing') ORDER BY created_at ASC;`;
+    const result = await pool.query(query);
+    
+    // กรองเฉพาะรายการอาหารที่เกี่ยวข้องกับ station นี้ในแต่ละออเดอร์
+    const filteredOrders = result.rows.map(order => {
+        const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
+        
+        // ถ้ามีรายการที่เกี่ยวข้องอย่างน้อย 1 รายการ ให้ return ออเดอร์นั้นไป
+        if (relevantItems.length > 0) {
+            return { ...order, items: relevantItems };
+        }
+        return null;
+    }).filter(Boolean); // .filter(Boolean) เพื่อตัดออเดอร์ที่เป็น null ออกไป
+
+    return filteredOrders;
+};
+
+
 // POST /api/orders
 const createOrder = async (req, res, next) => {
     console.log("Received cart data:", JSON.stringify(req.body.cart, null, 2));
@@ -58,7 +91,7 @@ const createOrder = async (req, res, next) => {
                  FROM menu_items mi
                  LEFT JOIN categories c ON mi.category_id = c.id
                  WHERE mi.id = $1
-                 FOR UPDATE OF mi`, // ✨ แก้ไขโดยระบุตาราง (mi คือ menu_items)
+                 FOR UPDATE OF mi`,
                 [itemInCart.productId || itemInCart.id]
             );
 
@@ -145,23 +178,12 @@ const createOrder = async (req, res, next) => {
 const getOrdersByStation = async (req, res, next) => {
     try {
         const { station } = req.query;
-        if (!station) return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station (kitchen หรือ bar)' });
-
-        const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
-        const targetCategories = categoriesResult.rows.map(row => row.name_th);
-        if (targetCategories.length === 0) return res.json({ status: 'success', data: [] });
-
-        const query = `SELECT * FROM orders WHERE status IN ('Pending', 'Cooking', 'Preparing') ORDER BY created_at ASC;`;
-        const result = await pool.query(query);
-        
-        const filteredOrders = result.rows.map(order => {
-            const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
-            if (relevantItems.length > 0) return { ...order, items: relevantItems };
-            return null;
-        }).filter(Boolean);
-
+        const filteredOrders = await getFilteredOrdersByStation(station);
         res.json({ status: 'success', data: filteredOrders });
     } catch (error) {
+        if (error.message.includes('กรุณาระบุ station')) {
+            return res.status(400).json({ status: 'error', message: error.message });
+        }
         next(error);
     }
 };
@@ -224,36 +246,12 @@ const updateOrderStatus = async (req, res, next) => {
 const getKdsOrders = async (req, res, next) => {
     try {
         const { station } = req.query;
-        if (!station) {
-            return res.status(400).json({ status: 'error', message: 'กรุณาระบุ station (kitchen หรือ bar)' });
-        }
-
-        const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
-        const targetCategories = categoriesResult.rows.map(row => row.name_th);
-
-        if (targetCategories.length === 0) {
-            return res.json({ status: 'success', data: [] });
-        }
-
-        const query = `
-            SELECT * FROM orders
-            WHERE status IN ('Pending', 'Cooking', 'Preparing')
-            ORDER BY created_at ASC;
-        `;
-        const result = await pool.query(query);
-        
-        const filteredOrders = result.rows.map(order => {
-            const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
-            
-            if (relevantItems.length > 0) {
-                return { ...order, items: relevantItems };
-            }
-            return null;
-        }).filter(Boolean);
-
+        const filteredOrders = await getFilteredOrdersByStation(station);
         res.json({ status: 'success', data: filteredOrders });
-
     } catch (error) {
+        if (error.message.includes('กรุณาระบุ station')) {
+            return res.status(400).json({ status: 'error', message: error.message });
+        }
         next(error);
     }
 };
