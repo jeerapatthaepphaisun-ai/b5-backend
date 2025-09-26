@@ -45,38 +45,54 @@ const getMenu = async (req, res, next) => {
         const menuResult = await pool.query(menuQuery, queryParams);
         let menuItems = menuResult.rows;
 
+        // --- ✨ ส่วนที่ปรับปรุงประสิทธิภาพ ---
         if (menuItems.length > 0) {
-            const optionsResult = await pool.query('SELECT * FROM menu_options;');
-            const optionsMap = optionsResult.rows.reduce((map, row) => {
-                const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
-                if (!map[option_set_id]) map[option_set_id] = [];
-                map[option_set_id].push({
-                    option_id: id,
-                    label_th,
-                    label_en,
-                    label_km,
-                    label_zh,
-                    price_add: parseFloat(price_add)
-                });
-                return map;
-            }, {});
+            // 1. ดึง ID ของเมนูที่แสดงผลในหน้านี้เท่านั้น
+            const menuItemIds = menuItems.map(item => item.id);
 
-            const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets;');
+            // 2. Query หา Option Sets ที่ผูกกับเมนูเหล่านี้เท่านั้น
+            const menuOptionsLinkResult = await pool.query(
+                'SELECT * FROM menu_item_option_sets WHERE menu_item_id = ANY($1::uuid[])',
+                [menuItemIds]
+            );
             const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
                 if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
                 map[row.menu_item_id].push(row.option_set_id);
                 return map;
             }, {});
+            
+            // 3. Query หา Options ที่อยู่ใน Option Sets เหล่านั้นเท่านั้น
+            const relevantOptionSetIds = [...new Set(menuOptionsLinkResult.rows.map(link => link.option_set_id))];
 
-            menuItems = menuItems.map(item => {
-                const optionSetIds = menuOptionsLink[item.id] || [];
-                item.option_groups = optionSetIds.reduce((groups, id) => {
-                    if (optionsMap[id]) groups[id] = optionsMap[id];
-                    return groups;
+            if (relevantOptionSetIds.length > 0) {
+                const optionsResult = await pool.query(
+                    'SELECT * FROM menu_options WHERE option_set_id = ANY($1::uuid[])',
+                    [relevantOptionSetIds]
+                );
+                
+                const optionsMap = optionsResult.rows.reduce((map, row) => {
+                    const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
+                    if (!map[option_set_id]) map[option_set_id] = [];
+                    map[option_set_id].push({
+                        option_id: id,
+                        label_th, label_en, label_km, label_zh,
+                        price_add: parseFloat(price_add)
+                    });
+                    return map;
                 }, {});
-                return item;
-            });
+
+                // 4. ประกอบข้อมูลกลับเข้าไปใน menuItems (เหมือนเดิม)
+                menuItems = menuItems.map(item => {
+                    const optionSetIds = menuOptionsLink[item.id] || [];
+                    item.option_groups = optionSetIds.reduce((groups, id) => {
+                        if (optionsMap[id]) groups[id] = optionsMap[id];
+                        return groups;
+                    }, {});
+                    return item;
+                });
+            }
         }
+        // --- ✨ จบส่วนที่แก้ไข ---
 
         res.json({
             status: 'success',
@@ -114,38 +130,48 @@ const getBarMenu = async (req, res, next) => {
         const menuResult = await pool.query(menuQuery, queryParams);
         let menuItems = menuResult.rows;
 
+        // --- ✨ ส่วนที่ปรับปรุงประสิทธิภาพ (เหมือนกับ getMenu) ---
         if (menuItems.length > 0) {
-            const optionsResult = await pool.query('SELECT * FROM menu_options;');
-            const optionsMap = optionsResult.rows.reduce((map, row) => {
-                const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
-                if (!map[option_set_id]) map[option_set_id] = [];
-                map[option_set_id].push({
-                    option_id: id,
-                    label_th,
-                    label_en,
-                    label_km,
-                    label_zh,
-                    price_add: parseFloat(price_add)
-                });
-                return map;
-            }, {});
-
-            const menuOptionsLinkResult = await pool.query('SELECT * FROM menu_item_option_sets;');
+            const menuItemIds = menuItems.map(item => item.id);
+            const menuOptionsLinkResult = await pool.query(
+                'SELECT * FROM menu_item_option_sets WHERE menu_item_id = ANY($1::uuid[])',
+                [menuItemIds]
+            );
             const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
                 if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
                 map[row.menu_item_id].push(row.option_set_id);
                 return map;
             }, {});
+            
+            const relevantOptionSetIds = [...new Set(menuOptionsLinkResult.rows.map(link => link.option_set_id))];
 
-            menuItems = menuItems.map(item => {
-                const optionSetIds = menuOptionsLink[item.id] || [];
-                item.option_groups = optionSetIds.reduce((groups, id) => {
-                    if (optionsMap[id]) groups[id] = optionsMap[id];
-                    return groups;
+            if (relevantOptionSetIds.length > 0) {
+                const optionsResult = await pool.query(
+                    'SELECT * FROM menu_options WHERE option_set_id = ANY($1::uuid[])',
+                    [relevantOptionSetIds]
+                );
+                const optionsMap = optionsResult.rows.reduce((map, row) => {
+                    const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
+                    if (!map[option_set_id]) map[option_set_id] = [];
+                    map[option_set_id].push({
+                        option_id: id,
+                        label_th, label_en, label_km, label_zh,
+                        price_add: parseFloat(price_add)
+                    });
+                    return map;
                 }, {});
-                return item;
-            });
+
+                menuItems = menuItems.map(item => {
+                    const optionSetIds = menuOptionsLink[item.id] || [];
+                    item.option_groups = optionSetIds.reduce((groups, id) => {
+                        if (optionsMap[id]) groups[id] = optionsMap[id];
+                        return groups;
+                    }, {});
+                    return item;
+                });
+            }
         }
+        // --- ✨ จบส่วนที่แก้ไข ---
 
         res.json({
             status: 'success',
