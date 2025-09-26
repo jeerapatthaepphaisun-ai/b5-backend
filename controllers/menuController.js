@@ -45,12 +45,8 @@ const getMenu = async (req, res, next) => {
         const menuResult = await pool.query(menuQuery, queryParams);
         let menuItems = menuResult.rows;
 
-        // --- ✨ ส่วนที่ปรับปรุงประสิทธิภาพ ---
         if (menuItems.length > 0) {
-            // 1. ดึง ID ของเมนูที่แสดงผลในหน้านี้เท่านั้น
             const menuItemIds = menuItems.map(item => item.id);
-
-            // 2. Query หา Option Sets ที่ผูกกับเมนูเหล่านี้เท่านั้น
             const menuOptionsLinkResult = await pool.query(
                 'SELECT * FROM menu_item_option_sets WHERE menu_item_id = ANY($1::uuid[])',
                 [menuItemIds]
@@ -61,8 +57,10 @@ const getMenu = async (req, res, next) => {
                 return map;
             }, {});
             
-            // 3. Query หา Options ที่อยู่ใน Option Sets เหล่านั้นเท่านั้น
             const relevantOptionSetIds = [...new Set(menuOptionsLinkResult.rows.map(link => link.option_set_id))];
+            
+            // ✨ FIX: ประกาศ optionsMap เป็น object ว่างไว้ก่อนเสมอ
+            let optionsMap = {};
 
             if (relevantOptionSetIds.length > 0) {
                 const optionsResult = await pool.query(
@@ -70,7 +68,8 @@ const getMenu = async (req, res, next) => {
                     [relevantOptionSetIds]
                 );
                 
-                const optionsMap = optionsResult.rows.reduce((map, row) => {
+                // เติมข้อมูลเข้าไปใน optionsMap ที่เราสร้างไว้
+                optionsMap = optionsResult.rows.reduce((map, row) => {
                     const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
                     if (!map[option_set_id]) map[option_set_id] = [];
                     map[option_set_id].push({
@@ -80,19 +79,18 @@ const getMenu = async (req, res, next) => {
                     });
                     return map;
                 }, {});
-
-                // 4. ประกอบข้อมูลกลับเข้าไปใน menuItems (เหมือนเดิม)
-                menuItems = menuItems.map(item => {
-                    const optionSetIds = menuOptionsLink[item.id] || [];
-                    item.option_groups = optionSetIds.reduce((groups, id) => {
-                        if (optionsMap[id]) groups[id] = optionsMap[id];
-                        return groups;
-                    }, {});
-                    return item;
-                });
             }
+
+            // ประกอบข้อมูลกลับเข้าไปใน menuItems (ส่วนนี้จะทำงานได้ปกติแล้ว)
+            menuItems = menuItems.map(item => {
+                const optionSetIds = menuOptionsLink[item.id] || [];
+                item.option_groups = optionSetIds.reduce((groups, id) => {
+                    if (optionsMap[id]) groups[id] = optionsMap[id];
+                    return groups;
+                }, {});
+                return item;
+            });
         }
-        // --- ✨ จบส่วนที่แก้ไข ---
 
         res.json({
             status: 'success',
@@ -130,7 +128,6 @@ const getBarMenu = async (req, res, next) => {
         const menuResult = await pool.query(menuQuery, queryParams);
         let menuItems = menuResult.rows;
 
-        // --- ✨ ส่วนที่ปรับปรุงประสิทธิภาพ (เหมือนกับ getMenu) ---
         if (menuItems.length > 0) {
             const menuItemIds = menuItems.map(item => item.id);
             const menuOptionsLinkResult = await pool.query(
@@ -145,12 +142,15 @@ const getBarMenu = async (req, res, next) => {
             
             const relevantOptionSetIds = [...new Set(menuOptionsLinkResult.rows.map(link => link.option_set_id))];
 
+            // ✨ FIX: ประกาศ optionsMap เป็น object ว่างไว้ก่อนเสมอ
+            let optionsMap = {};
+
             if (relevantOptionSetIds.length > 0) {
                 const optionsResult = await pool.query(
                     'SELECT * FROM menu_options WHERE option_set_id = ANY($1::uuid[])',
                     [relevantOptionSetIds]
                 );
-                const optionsMap = optionsResult.rows.reduce((map, row) => {
+                optionsMap = optionsResult.rows.reduce((map, row) => {
                     const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
                     if (!map[option_set_id]) map[option_set_id] = [];
                     map[option_set_id].push({
@@ -160,18 +160,17 @@ const getBarMenu = async (req, res, next) => {
                     });
                     return map;
                 }, {});
-
-                menuItems = menuItems.map(item => {
-                    const optionSetIds = menuOptionsLink[item.id] || [];
-                    item.option_groups = optionSetIds.reduce((groups, id) => {
-                        if (optionsMap[id]) groups[id] = optionsMap[id];
-                        return groups;
-                    }, {});
-                    return item;
-                });
             }
+
+            menuItems = menuItems.map(item => {
+                const optionSetIds = menuOptionsLink[item.id] || [];
+                item.option_groups = optionSetIds.reduce((groups, id) => {
+                    if (optionsMap[id]) groups[id] = optionsMap[id];
+                    return groups;
+                }, {});
+                return item;
+            });
         }
-        // --- ✨ จบส่วนที่แก้ไข ---
 
         res.json({
             status: 'success',
@@ -184,7 +183,6 @@ const getBarMenu = async (req, res, next) => {
         next(error);
     }
 };
-
 
 const createMenuItem = async (req, res, next) => {
     try {
@@ -339,7 +337,6 @@ const getStockAlerts = async (req, res, next) => {
     }
 };
 
-// GET /api/menu/items/:id/option-sets
 const getOptionSetsForMenuItem = async (req, res, next) => {
     try {
         const { id } = req.params;
@@ -354,18 +351,15 @@ const getOptionSetsForMenuItem = async (req, res, next) => {
     }
 };
 
-// PUT /api/menu/items/:id/option-sets
 const updateOptionSetsForMenuItem = async (req, res, next) => {
     const { id } = req.params;
-    const { optionSetIds } = req.body; // Expect an array of UUIDs
+    const { optionSetIds } = req.body;
     const client = await pool.connect();
 
     try {
         await client.query('BEGIN');
-        // First, delete all existing associations for this menu item
         await client.query('DELETE FROM menu_item_option_sets WHERE menu_item_id = $1', [id]);
 
-        // Then, insert the new associations
         if (optionSetIds && optionSetIds.length > 0) {
             const insertPromises = optionSetIds.map(setId => {
                 return client.query(
