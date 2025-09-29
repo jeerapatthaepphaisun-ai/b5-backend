@@ -12,6 +12,23 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
+
+// =================================================================
+// --- Global Error Handlers (ส่วนที่เพิ่มเข้ามาใหม่) ---
+// =================================================================
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // จุดนี้เป็นจุดสำคัญที่จะบอกเราว่ามี Promise ที่ไหนลืมใส่ .catch()
+});
+
+process.on('uncaughtException', (err, origin) => {
+  console.error('Uncaught Exception:', err, 'Origin:', origin);
+  // เมื่อเกิด Error ที่ไม่คาดฝัน การปล่อยให้โปรเซสหยุดทำงานแล้วให้ Render.com
+  // จัดการรีสตาร์ทให้ใหม่ จะปลอดภัยกว่าการปล่อยให้ทำงานต่อ
+  process.exit(1);
+});
+
+
 // =================================================================
 // --- Middleware & Configs ---
 // =================================================================
@@ -90,6 +107,10 @@ const optionRoutes = require('./routes/optionRoutes');
 // --- ลงทะเบียน Routes (Use Routes) ---
 // =================================================================
 app.get('/', (req, res) => res.status(200).send('Tonnam Cafe Backend is running!'));
+
+// เพิ่ม Health Check Endpoint สำหรับ UptimeRobot
+app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
 
 app.use('/api', authRoutes); // สำหรับ /login
 app.use('/api/categories', categoryRoutes);
