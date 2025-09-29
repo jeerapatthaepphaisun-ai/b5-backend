@@ -31,7 +31,7 @@ const getMenu = async (req, res, next) => {
         queryParams.push(limit);
         queryParams.push(offset);
 
-        // Query ที่ถูกต้องสมบูรณ์
+        // --- ✨ START: โค้ดที่ปรับปรุงใหม่ ---
         const menuQuery = `
             SELECT
                 mi.*,
@@ -40,10 +40,15 @@ const getMenu = async (req, res, next) => {
                 COALESCE(
                     (SELECT jsonb_object_agg(
                         os.id,
-                        COALESCE(
-                            (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id),
-                            '[]'::json)
+                        jsonb_build_object(
+                            'name_th', os.name_th,
+                            'name_en', os.name_en,
+                            'options', COALESCE(
+                                (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id),
+                                '[]'::json
+                            )
                         )
+                    )
                     FROM menu_item_option_sets mios
                     JOIN option_sets os ON mios.option_set_id = os.id
                     WHERE mios.menu_item_id = mi.id),
@@ -55,6 +60,7 @@ const getMenu = async (req, res, next) => {
             ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC
             LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}
         `;
+        // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
 
         const menuResult = await pool.query(menuQuery, queryParams);
 
@@ -86,6 +92,7 @@ const getBarMenu = async (req, res, next) => {
 
         const whereString = `WHERE ${whereClauses.join(' AND ')}`;
 
+        // --- ✨ START: โค้ดที่ปรับปรุงใหม่ ---
         const menuQuery = `
             SELECT
                 mi.*,
@@ -94,10 +101,15 @@ const getBarMenu = async (req, res, next) => {
                 COALESCE(
                     (SELECT jsonb_object_agg(
                         os.id,
-                        COALESCE(
-                            (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id),
-                            '[]'::json)
+                        jsonb_build_object(
+                            'name_th', os.name_th,
+                            'name_en', os.name_en,
+                            'options', COALESCE(
+                                (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id),
+                                '[]'::json
+                            )
                         )
+                    )
                     FROM menu_item_option_sets mios
                     JOIN option_sets os ON mios.option_set_id = os.id
                     WHERE mios.menu_item_id = mi.id),
@@ -108,6 +120,7 @@ const getBarMenu = async (req, res, next) => {
             GROUP BY mi.id, c.id
             ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC
         `;
+        // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
 
         const menuResult = await pool.query(menuQuery, queryParams);
 
