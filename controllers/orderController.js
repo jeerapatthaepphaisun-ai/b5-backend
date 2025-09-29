@@ -1,6 +1,4 @@
 // controllers/orderController.js
-
-// --- ส่วนที่เพิ่มเข้ามา ---
 const { validationResult } = require('express-validator'); 
 const pool = require('../db');
 
@@ -9,44 +7,30 @@ const getFilteredOrdersByStation = async (station) => {
     if (!station) {
         throw new Error('กรุณาระบุ station (kitchen หรือ bar)');
     }
-
-    // ดึงชื่อหมวดหมู่ที่ตรงกับ station ที่ระบุ
     const categoriesResult = await pool.query('SELECT name_th FROM categories WHERE station_type = $1', [station]);
     const targetCategories = categoriesResult.rows.map(row => row.name_th);
-
     if (targetCategories.length === 0) {
-        return []; // ถ้าไม่มีหมวดหมู่สำหรับ station นี้ ก็ return ค่าว่างไปเลย
+        return [];
     }
-
-    // ดึงออเดอร์ที่ยังไม่เสร็จทั้งหมด
     const query = `SELECT * FROM orders WHERE status IN ('Pending', 'Cooking', 'Preparing') ORDER BY created_at ASC;`;
     const result = await pool.query(query);
-    
-    // กรองเฉพาะรายการอาหารที่เกี่ยวข้องกับ station นี้ในแต่ละออเดอร์
     const filteredOrders = result.rows.map(order => {
         const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
-        
-        // ถ้ามีรายการที่เกี่ยวข้องอย่างน้อย 1 รายการ ให้ return ออเดอร์นั้นไป
         if (relevantItems.length > 0) {
             return { ...order, items: relevantItems };
         }
         return null;
-    }).filter(Boolean); // .filter(Boolean) เพื่อตัดออเดอร์ที่เป็น null ออกไป
-
+    }).filter(Boolean);
     return filteredOrders;
 };
 
 
 // POST /api/orders
 const createOrder = async (req, res, next) => {
-    // --- ส่วนที่เพิ่มเข้ามาสำหรับการ Validation ---
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-        // ถ้ามี Error จากการ Validation, ให้ส่ง Status 400 (Bad Request)
-        // พร้อมรายละเอียดของ Error กลับไปทันที และหยุดการทำงาน
         return res.status(400).json({ status: 'error', errors: errors.array() });
     }
-    // --- จบส่วนที่เพิ่มเข้ามา ---
 
     console.log("Received cart data:", JSON.stringify(req.body.cart, null, 2));
     const client = await pool.connect();
@@ -103,7 +87,7 @@ const createOrder = async (req, res, next) => {
                  LEFT JOIN categories c ON mi.category_id = c.id
                  WHERE mi.id = $1
                  FOR UPDATE OF mi`,
-                [itemInCart.productId || itemInCart.id]
+                [itemInCart.id]
             );
 
             if (itemResult.rows.length === 0) throw new Error(`Item with ID ${itemInCart.id} not found.`);
@@ -164,9 +148,11 @@ const createOrder = async (req, res, next) => {
         const subtotal = calculatedSubtotal;
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
+        
+        const finalStatus = (orderSource === 'bar') ? 'Paid' : 'Pending';
 
         const query = `INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;`;
-        const values = [finalTableName, JSON.stringify(finalCartForStorage), subtotal, discountPercentage, discountAmount, finalTotal, specialRequest || '', 'Pending', isTakeaway, discountedByUser];
+        const values = [finalTableName, JSON.stringify(finalCartForStorage), subtotal, discountPercentage, discountAmount, finalTotal, specialRequest || '', finalStatus, isTakeaway, discountedByUser];
         const result = await client.query(query, values);
 
         await client.query('COMMIT');
