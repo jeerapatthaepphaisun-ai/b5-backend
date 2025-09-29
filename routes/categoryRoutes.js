@@ -1,19 +1,11 @@
+// routes/categoryRoutes.js
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
-const rateLimit = require('express-rate-limit');
-
 const categoryController = require('../controllers/categoryController');
 const { authenticateToken } = require('../middleware/auth');
-
-// Define rate limiter for these specific routes
-const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100,
-    message: 'คุณส่งคำขอมากเกินไป กรุณารอสักครู่',
-    standardHeaders: true,
-    legacyHeaders: false,
-});
+// ✨ 1. เปลี่ยนไปใช้ apiLimiter ตัวกลาง
+const { apiLimiter } = require('../middleware/rateLimiter');
 
 // Validation rules for category
 const categoryValidation = [
@@ -23,23 +15,17 @@ const categoryValidation = [
 ];
 
 // --- Define Routes ---
-
-// GET /api/categories - Public route, no auth needed
 router.get('/', categoryController.getAllCategories);
 
-// GET /api/categories/by-station - For KDS, requires auth (Route ที่เพิ่มเข้ามาใหม่)
 router.get('/by-station', authenticateToken('kitchen', 'bar', 'admin'), categoryController.getCategoriesByStation);
 
-// POST /api/categories - Admin only
+// ✨ 2. ใช้ apiLimiter ที่ import มา
 router.post('/', authenticateToken('admin'), apiLimiter, categoryValidation, categoryController.createCategory);
 
-// PUT /api/categories/reorder - Admin only
 router.put('/reorder', authenticateToken('admin'), apiLimiter, categoryController.reorderCategories);
 
-// PUT /api/categories/:id - Admin only
 router.put('/:id', authenticateToken('admin'), apiLimiter, categoryValidation, categoryController.updateCategory);
 
-// DELETE /api/categories/:id - Admin only
 router.delete('/:id', authenticateToken('admin'), apiLimiter, categoryController.deleteCategory);
 
 module.exports = router;

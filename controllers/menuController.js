@@ -1,5 +1,50 @@
+// controllers/menuController.js
 const pool = require('../db');
 const { validationResult } = require('express-validator');
+
+// ✨ --- START: สร้างฟังก์ชัน Helper กลาง --- ✨
+// ฟังก์ชันนี้จะรับผิดชอบการดึงข้อมูลเมนูพร้อมตัวเลือกเสริมทั้งหมดใน Query เดียว
+const fetchMenuItemsWithDetails = async (baseQuery, queryParams) => {
+    const menuQuery = `
+        SELECT
+            mi.*,
+            c.name_th as category_th,
+            c.name_en as category_en,
+            COALESCE(
+                (SELECT json_agg(
+                    json_build_object(
+                        'option_set_id', os.id,
+                        'option_set_name_th', os.name_th,
+                        'option_set_name_en', os.name_en,
+                        'options', COALESCE((
+                            SELECT json_agg(
+                                json_build_object(
+                                    'option_id', mo.id,
+                                    'label_th', mo.label_th,
+                                    'label_en', mo.label_en,
+                                    'label_km', mo.label_km,
+                                    'label_zh', mo.label_zh,
+                                    'price_add', mo.price_add
+                                ) ORDER BY mo.created_at
+                            )
+                            FROM menu_options mo WHERE mo.option_set_id = os.id
+                        ), '[]'::json)
+                    ) ORDER BY os.created_at
+                )
+                FROM menu_item_option_sets mios
+                JOIN option_sets os ON mios.option_set_id = os.id
+                WHERE mios.menu_item_id = mi.id
+            ), '[]'::json) as option_groups
+        ${baseQuery}
+        GROUP BY mi.id, c.name_th, c.name_en, c.sort_order
+        ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC
+    `;
+
+    const menuResult = await pool.query(menuQuery, queryParams);
+    return menuResult.rows;
+};
+// ✨ --- END: สร้างฟังก์ชัน Helper กลาง --- ✨
+
 
 // GET /api/menu
 const getMenu = async (req, res, next) => {
@@ -10,13 +55,12 @@ const getMenu = async (req, res, next) => {
             FROM menu_items mi
             LEFT JOIN categories c ON mi.category_id = c.id
         `;
-        // ✨ FIX: เพิ่มเงื่อนไข WHERE เริ่มต้นเพื่อกรองเมนูที่ไม่มีหมวดหมู่ออก
-        let whereClauses = ["mi.category_id IS NOT NULL"]; 
+        let whereClauses = ["mi.category_id IS NOT NULL"];
         let queryParams = [];
 
         if (category && category !== 'all') {
             queryParams.push(category);
-            whereClauses.push(`mi.category_id = $${queryParams.length}`);
+            whereClauses.push(`c.id = $${queryParams.length}`);
         }
 
         if (search) {
@@ -35,60 +79,10 @@ const getMenu = async (req, res, next) => {
         const offset = (page - 1) * limit;
         queryParams.push(limit);
         queryParams.push(offset);
+        
+        baseQuery += ` LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`;
 
-        const menuQuery = `
-            SELECT mi.*, c.name_th as category_th, c.name_en as category_en
-            ${baseQuery}
-            ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC
-            LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length};
-        `;
-
-        const menuResult = await pool.query(menuQuery, queryParams);
-        let menuItems = menuResult.rows;
-
-        if (menuItems.length > 0) {
-            const menuItemIds = menuItems.map(item => item.id);
-            const menuOptionsLinkResult = await pool.query(
-                'SELECT * FROM menu_item_option_sets WHERE menu_item_id = ANY($1::uuid[])',
-                [menuItemIds]
-            );
-            const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
-                if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
-                map[row.menu_item_id].push(row.option_set_id);
-                return map;
-            }, {});
-            
-            const relevantOptionSetIds = [...new Set(menuOptionsLinkResult.rows.map(link => link.option_set_id))];
-            
-            let optionsMap = {};
-
-            if (relevantOptionSetIds.length > 0) {
-                const optionsResult = await pool.query(
-                    'SELECT * FROM menu_options WHERE option_set_id = ANY($1::uuid[])',
-                    [relevantOptionSetIds]
-                );
-                
-                optionsMap = optionsResult.rows.reduce((map, row) => {
-                    const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
-                    if (!map[option_set_id]) map[option_set_id] = [];
-                    map[option_set_id].push({
-                        option_id: id,
-                        label_th, label_en, label_km, label_zh,
-                        price_add: parseFloat(price_add)
-                    });
-                    return map;
-                }, {});
-            }
-
-            menuItems = menuItems.map(item => {
-                const optionSetIds = menuOptionsLink[item.id] || [];
-                item.option_groups = optionSetIds.reduce((groups, id) => {
-                    if (optionsMap[id]) groups[id] = optionsMap[id];
-                    return groups;
-                }, {});
-                return item;
-            });
-        }
+        const menuItems = await fetchMenuItemsWithDetails(baseQuery, queryParams);
 
         res.json({
             status: 'success',
@@ -108,7 +102,6 @@ const getBarMenu = async (req, res, next) => {
     try {
         const { search } = req.query;
         let queryParams = ['bar'];
-        // ✨ FIX: เพิ่มเงื่อนไข mi.category_id IS NOT NULL ด้วย
         let whereClauses = ["c.station_type = $1", "mi.category_id IS NOT NULL"];
 
         if (search) {
@@ -116,59 +109,13 @@ const getBarMenu = async (req, res, next) => {
             whereClauses.push(`(mi.name_th ILIKE $${queryParams.length} OR mi.name_en ILIKE $${queryParams.length})`);
         }
 
-        const menuQuery = `
-            SELECT mi.*, c.name_th as category_th, c.name_en as category_en
+        const baseQuery = `
             FROM menu_items mi
             JOIN categories c ON mi.category_id = c.id
             WHERE ${whereClauses.join(' AND ')}
-            ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC;
         `;
 
-        const menuResult = await pool.query(menuQuery, queryParams);
-        let menuItems = menuResult.rows;
-
-        if (menuItems.length > 0) {
-            const menuItemIds = menuItems.map(item => item.id);
-            const menuOptionsLinkResult = await pool.query(
-                'SELECT * FROM menu_item_option_sets WHERE menu_item_id = ANY($1::uuid[])',
-                [menuItemIds]
-            );
-            const menuOptionsLink = menuOptionsLinkResult.rows.reduce((map, row) => {
-                if (!map[row.menu_item_id]) map[row.menu_item_id] = [];
-                map[row.menu_item_id].push(row.option_set_id);
-                return map;
-            }, {});
-            
-            const relevantOptionSetIds = [...new Set(menuOptionsLinkResult.rows.map(link => link.option_set_id))];
-
-            let optionsMap = {};
-
-            if (relevantOptionSetIds.length > 0) {
-                const optionsResult = await pool.query(
-                    'SELECT * FROM menu_options WHERE option_set_id = ANY($1::uuid[])',
-                    [relevantOptionSetIds]
-                );
-                optionsMap = optionsResult.rows.reduce((map, row) => {
-                    const { option_set_id, id, label_th, label_en, label_km, label_zh, price_add } = row;
-                    if (!map[option_set_id]) map[option_set_id] = [];
-                    map[option_set_id].push({
-                        option_id: id,
-                        label_th, label_en, label_km, label_zh,
-                        price_add: parseFloat(price_add)
-                    });
-                    return map;
-                }, {});
-            }
-
-            menuItems = menuItems.map(item => {
-                const optionSetIds = menuOptionsLink[item.id] || [];
-                item.option_groups = optionSetIds.reduce((groups, id) => {
-                    if (optionsMap[id]) groups[id] = optionsMap[id];
-                    return groups;
-                }, {});
-                return item;
-            });
-        }
+        const menuItems = await fetchMenuItemsWithDetails(baseQuery, queryParams);
 
         res.json({
             status: 'success',

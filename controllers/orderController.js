@@ -1,5 +1,7 @@
 // controllers/orderController.js
 
+// --- ส่วนที่เพิ่มเข้ามา ---
+const { validationResult } = require('express-validator'); 
 const pool = require('../db');
 
 // --- ฟังก์ชัน Helper กลางสำหรับดึงออเดอร์ตาม Station ---
@@ -37,6 +39,15 @@ const getFilteredOrdersByStation = async (station) => {
 
 // POST /api/orders
 const createOrder = async (req, res, next) => {
+    // --- ส่วนที่เพิ่มเข้ามาสำหรับการ Validation ---
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        // ถ้ามี Error จากการ Validation, ให้ส่ง Status 400 (Bad Request)
+        // พร้อมรายละเอียดของ Error กลับไปทันที และหยุดการทำงาน
+        return res.status(400).json({ status: 'error', errors: errors.array() });
+    }
+    // --- จบส่วนที่เพิ่มเข้ามา ---
+
     console.log("Received cart data:", JSON.stringify(req.body.cart, null, 2));
     const client = await pool.connect();
     try {

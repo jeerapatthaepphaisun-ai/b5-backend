@@ -1,8 +1,11 @@
+// routes/menuRoutes.js
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const menuController = require('../controllers/menuController');
 const { authenticateToken } = require('../middleware/auth');
+// ✨ 1. Import apiLimiter
+const { apiLimiter } = require('../middleware/rateLimiter');
 
 // Validation middleware for creating/updating menu items
 const menuItemValidation = [
@@ -13,39 +16,30 @@ const menuItemValidation = [
     body('current_stock').isInt({ min: 0 }).withMessage('สต็อกต้องเป็นเลขจำนวนเต็ม 0 หรือมากกว่า')
 ];
 
-// GET /api/menu (Public facing menu for customers)
+// --- Public Routes (GET) ---
 router.get('/', menuController.getMenu);
-
-// GET /api/menu/bar (New route for the Bar POS)
 router.get('/bar', menuController.getBarMenu);
 
-// GET /api/menu/stock-alerts
+// --- Admin Routes (Protected by Auth and Rate Limiter) ---
 router.get('/stock-alerts', authenticateToken('admin'), menuController.getStockAlerts);
 
-// POST /api/menu/items (Create new menu item)
-router.post('/items', authenticateToken('admin'), menuItemValidation, menuController.createMenuItem);
+router.post('/items', authenticateToken('admin'), apiLimiter, menuItemValidation, menuController.createMenuItem);
 
-// GET /api/menu/items/:id (Get single menu item for editing)
 router.get('/items/:id', authenticateToken('admin'), menuController.getMenuItemById);
 
-// PUT /api/menu/items/reorder
-router.put('/items/reorder', authenticateToken('admin'), menuController.reorderMenuItems);
+router.put('/items/reorder', authenticateToken('admin'), apiLimiter, menuController.reorderMenuItems);
 
-// PUT /api/menu/items/:id (Update a menu item)
-router.put('/items/:id', authenticateToken('admin'), menuItemValidation, menuController.updateMenuItem);
+router.put('/items/:id', authenticateToken('admin'), apiLimiter, menuItemValidation, menuController.updateMenuItem);
 
-// DELETE /api/menu/items/:id (Delete a menu item)
-router.delete('/items/:id', authenticateToken('admin'), menuController.deleteMenuItem);
+router.delete('/items/:id', authenticateToken('admin'), apiLimiter, menuController.deleteMenuItem);
 
-// ✨ เพิ่ม 2 Routes ใหม่สำหรับจัดการ Option Set ของเมนู
 router.get('/items/:id/option-sets', authenticateToken('admin'), menuController.getOptionSetsForMenuItem);
-router.put('/items/:id/option-sets', authenticateToken('admin'), menuController.updateOptionSetsForMenuItem);
 
-// GET /api/menu/stock-items
+router.put('/items/:id/option-sets', authenticateToken('admin'), apiLimiter, menuController.updateOptionSetsForMenuItem);
+
 router.get('/stock-items', authenticateToken('admin'), menuController.getStockItems);
 
-// PUT /api/menu/update-item-stock/:id
-router.put('/update-item-stock/:id', authenticateToken('admin'), [
+router.put('/update-item-stock/:id', authenticateToken('admin'), apiLimiter, [
     body('current_stock').isNumeric().withMessage('Current stock must be a number.')
 ], menuController.updateItemStock);
 

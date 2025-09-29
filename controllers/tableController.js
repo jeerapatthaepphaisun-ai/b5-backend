@@ -2,6 +2,8 @@
 
 const pool = require('../db');
 const { validationResult } = require('express-validator');
+// ✨ 1. Import ฟังก์ชัน Helper สำหรับการคำนวณ
+const { calculateOrderTotals } = require('../utils/calculationHelpers');
 
 // GET /api/tables (for cashier view)
 const getTableData = async (req, res, next) => {
@@ -20,25 +22,18 @@ const getTableData = async (req, res, next) => {
         const allTableNames = result.rows.map(r => r.table_name);
         const occupiedTablesData = result.rows.reduce((acc, row) => {
             if (row.orders_data) {
-                // --- ✨ ส่วนที่แก้ไขใหม่ทั้งหมด ---
-                const VAT_RATE = parseFloat(process.env.VAT_RATE) || 0.07; // ดึงค่า VAT จาก .env
-
-                const subtotal = row.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
-                const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
-                const totalAfterDiscount = subtotal - discountAmount;
-                const vatAmount = totalAfterDiscount * VAT_RATE; // คำนวณยอด VAT แยก
-                const grandTotal = totalAfterDiscount + vatAmount; // คำนวณยอดสุทธิ
-                const discountPercentage = row.orders_data[0]?.discount_percentage || 0;
+                // ✨ 2. เรียกใช้ฟังก์ชัน Helper กลางเพื่อคำนวณยอดทั้งหมด
+                const totals = calculateOrderTotals(row.orders_data);
 
                 acc[row.table_name] = {
                     tableName: row.table_name,
-                    orders: row.orders_data.flatMap(order => order.items),
+                    orders: totals.orders,
                     status: row.table_status,
-                    subtotal: subtotal,
-                    discountAmount: discountAmount,
-                    vatAmount: vatAmount,       // <-- เพิ่ม vatAmount
-                    total: grandTotal,          // <-- total คือยอดสุทธิสุดท้าย
-                    discountPercentage: discountPercentage
+                    subtotal: totals.subtotal,
+                    discountAmount: totals.discountAmount,
+                    vatAmount: totals.vatAmount,
+                    total: totals.grandTotal, // total คือยอดสุทธิสุดท้าย
+                    discountPercentage: totals.discountPercentage
                 };
             }
             return acc;

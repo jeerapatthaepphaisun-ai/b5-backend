@@ -1,5 +1,7 @@
 // controllers/takeawayController.js
 const pool = require('../db');
+// ✨ 1. Import ฟังก์ชัน Helper สำหรับการคำนวณ
+const { calculateOrderTotals } = require('../utils/calculationHelpers');
 
 // GET /api/takeaway-orders
 const getTakeawayOrders = async (req, res, next) => {
@@ -28,25 +30,18 @@ const getTakeawayOrders = async (req, res, next) => {
         const result = await pool.query(query);
 
         const occupiedTakeaways = result.rows.reduce((acc, row) => {
-            // --- ✨ ส่วนที่แก้ไขใหม่ทั้งหมด ---
-            const VAT_RATE = parseFloat(process.env.VAT_RATE) || 0.07; // ดึงค่า VAT จาก .env
-
-            const subtotal = row.orders_data.reduce((sum, order) => sum + parseFloat(order.subtotal), 0);
-            const discountAmount = row.orders_data.reduce((sum, order) => sum + parseFloat(order.discount_amount), 0);
-            const totalAfterDiscount = subtotal - discountAmount;
-            const vatAmount = totalAfterDiscount * VAT_RATE;
-            const grandTotal = totalAfterDiscount + vatAmount;
-            const discountPercentage = row.orders_data[0]?.discount_percentage || 0;
+            // ✨ 2. เรียกใช้ฟังก์ชัน Helper กลางเพื่อคำนวณยอดทั้งหมด
+            const totals = calculateOrderTotals(row.orders_data);
 
             acc[row.table_name] = {
                 tableName: row.table_name,
-                orders: row.orders_data.flatMap(order => order.items),
+                orders: totals.orders,
                 status: row.status,
-                subtotal: subtotal,
-                discountAmount: discountAmount,
-                vatAmount: vatAmount,       // <-- เพิ่ม vatAmount
-                total: grandTotal,          // <-- total คือยอดสุทธิสุดท้าย
-                discountPercentage: discountPercentage
+                subtotal: totals.subtotal,
+                discountAmount: totals.discountAmount,
+                vatAmount: totals.vatAmount,
+                total: totals.grandTotal, // total คือยอดสุทธิสุดท้าย
+                discountPercentage: totals.discountPercentage
             };
             return acc;
         }, {});
