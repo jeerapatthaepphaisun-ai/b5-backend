@@ -2,58 +2,11 @@
 const pool = require('../db');
 const { validationResult } = require('express-validator');
 
-// ✨ --- START: Helper ที่แก้ไขแล้ว --- ✨
-const fetchMenuItemsWithDetails = async (baseQuery, queryParams) => {
-    const menuQuery = `
-        SELECT
-            mi.*,
-            c.name_th as category_th,
-            c.name_en as category_en,
-            COALESCE(
-                (SELECT json_agg(
-                    json_build_object(
-                        'option_set_id', os.id,
-                        'option_set_name_th', os.name_th,
-                        'option_set_name_en', os.name_en,
-                        'options', COALESCE((
-                            SELECT json_agg(
-                                json_build_object(
-                                    'option_id', mo.id,
-                                    'label_th', mo.label_th,
-                                    'label_en', mo.label_en,
-                                    'label_km', mo.label_km,
-                                    'label_zh', mo.label_zh,
-                                    'price_add', mo.price_add
-                                ) ORDER BY mo.created_at
-                            )
-                            FROM menu_options mo WHERE mo.option_set_id = os.id
-                        ), '[]'::json)
-                    ) ORDER BY os.created_at
-                )
-                FROM menu_item_option_sets mios
-                JOIN option_sets os ON mios.option_set_id = os.id
-                WHERE mios.menu_item_id = mi.id
-            ), '[]'::json) as option_groups
-        ${baseQuery}
-        GROUP BY mi.id, c.name_th, c.name_en, c.sort_order
-        ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC
-    `;
-
-    const menuResult = await pool.query(menuQuery, queryParams);
-    return menuResult.rows;
-};
-// ✨ --- END: Helper ที่แก้ไขแล้ว --- ✨
-
-
-// GET /api/menu
+// GET /api/menu (ฉบับแก้ไขถูกต้อง)
 const getMenu = async (req, res, next) => {
     try {
         const { category, search, page = 1, limit = 1000 } = req.query;
 
-        let fromAndWhere = `
-            FROM menu_items mi
-            LEFT JOIN categories c ON mi.category_id = c.id
-        `;
         let whereClauses = ["mi.category_id IS NOT NULL"];
         let queryParams = [];
 
@@ -67,24 +20,50 @@ const getMenu = async (req, res, next) => {
             whereClauses.push(`(mi.name_th ILIKE $${queryParams.length} OR mi.name_en ILIKE $${queryParams.length})`);
         }
 
-        if (whereClauses.length > 0) {
-            fromAndWhere += ' WHERE ' + whereClauses.join(' AND ');
-        }
+        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-        const totalResult = await pool.query(`SELECT COUNT(*) ${fromAndWhere}`, queryParams);
+        // Count total items for pagination
+        const totalResult = await pool.query(`SELECT COUNT(DISTINCT mi.id) FROM menu_items mi LEFT JOIN categories c ON mi.category_id = c.id ${whereString}`, queryParams);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
         const totalPages = Math.ceil(totalItems / limit);
-
-        const offset = (page - 1) * limit;
-        const pagination = ` LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
-        queryParams.push(limit, offset);
         
-        const menuItems = await fetchMenuItemsWithDetails(fromAndWhere + pagination, queryParams);
+        const offset = (page - 1) * limit;
+        queryParams.push(limit);
+        queryParams.push(offset);
+        
+        // Query ที่ถูกต้องสมบูรณ์
+        const menuQuery = `
+            SELECT
+                mi.*,
+                c.name_th as category_th,
+                c.name_en as category_en,
+                COALESCE(
+                    (SELECT json_agg(
+                        json_build_object(
+                            'option_set_id', os.id,
+                            'option_set_name_th', os.name_th,
+                            'options', COALESCE(
+                                (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id), 
+                                '[]'::json)
+                        ) ORDER BY os.created_at)
+                    FROM menu_item_option_sets mios
+                    JOIN option_sets os ON mios.option_set_id = os.id
+                    WHERE mios.menu_item_id = mi.id), 
+                '[]'::json) as option_groups
+            FROM menu_items mi
+            LEFT JOIN categories c ON mi.category_id = c.id
+            ${whereString}
+            GROUP BY mi.id, c.id
+            ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC
+            LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}
+        `;
+
+        const menuResult = await pool.query(menuQuery, queryParams);
 
         res.json({
             status: 'success',
             data: {
-                items: menuItems,
+                items: menuResult.rows,
                 totalItems,
                 totalPages,
                 currentPage: parseInt(page, 10)
@@ -95,6 +74,7 @@ const getMenu = async (req, res, next) => {
     }
 };
 
+// GET /api/menu/bar (ฉบับแก้ไขถูกต้อง)
 const getBarMenu = async (req, res, next) => {
     try {
         const { search } = req.query;
@@ -105,19 +85,40 @@ const getBarMenu = async (req, res, next) => {
             queryParams.push(`%${search}%`);
             whereClauses.push(`(mi.name_th ILIKE $${queryParams.length} OR mi.name_en ILIKE $${queryParams.length})`);
         }
+        
+        const whereString = `WHERE ${whereClauses.join(' AND ')}`;
 
-        const fromAndWhere = `
+        const menuQuery = `
+            SELECT
+                mi.*,
+                c.name_th as category_th,
+                c.name_en as category_en,
+                COALESCE(
+                    (SELECT json_agg(
+                        json_build_object(
+                            'option_set_id', os.id,
+                            'option_set_name_th', os.name_th,
+                            'options', COALESCE(
+                                (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id), 
+                                '[]'::json)
+                        ) ORDER BY os.created_at)
+                    FROM menu_item_option_sets mios
+                    JOIN option_sets os ON mios.option_set_id = os.id
+                    WHERE mios.menu_item_id = mi.id), 
+                '[]'::json) as option_groups
             FROM menu_items mi
             JOIN categories c ON mi.category_id = c.id
-            WHERE ${whereClauses.join(' AND ')}
+            ${whereString}
+            GROUP BY mi.id, c.id
+            ORDER BY c.sort_order ASC, mi.sort_order ASC, mi.name_th ASC
         `;
 
-        const menuItems = await fetchMenuItemsWithDetails(fromAndWhere, queryParams);
+        const menuResult = await pool.query(menuQuery, queryParams);
 
         res.json({
             status: 'success',
             data: {
-                items: menuItems
+                items: menuResult.rows
             }
         });
 
