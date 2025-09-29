@@ -2,8 +2,7 @@
 const pool = require('../db');
 const { validationResult } = require('express-validator');
 
-// ✨ --- START: สร้างฟังก์ชัน Helper กลาง --- ✨
-// ฟังก์ชันนี้จะรับผิดชอบการดึงข้อมูลเมนูพร้อมตัวเลือกเสริมทั้งหมดใน Query เดียว
+// ✨ --- START: Helper ที่แก้ไขแล้ว --- ✨
 const fetchMenuItemsWithDetails = async (baseQuery, queryParams) => {
     const menuQuery = `
         SELECT
@@ -43,7 +42,7 @@ const fetchMenuItemsWithDetails = async (baseQuery, queryParams) => {
     const menuResult = await pool.query(menuQuery, queryParams);
     return menuResult.rows;
 };
-// ✨ --- END: สร้างฟังก์ชัน Helper กลาง --- ✨
+// ✨ --- END: Helper ที่แก้ไขแล้ว --- ✨
 
 
 // GET /api/menu
@@ -51,7 +50,7 @@ const getMenu = async (req, res, next) => {
     try {
         const { category, search, page = 1, limit = 1000 } = req.query;
 
-        let baseQuery = `
+        let fromAndWhere = `
             FROM menu_items mi
             LEFT JOIN categories c ON mi.category_id = c.id
         `;
@@ -69,20 +68,18 @@ const getMenu = async (req, res, next) => {
         }
 
         if (whereClauses.length > 0) {
-            baseQuery += ' WHERE ' + whereClauses.join(' AND ');
+            fromAndWhere += ' WHERE ' + whereClauses.join(' AND ');
         }
 
-        const totalResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, queryParams);
+        const totalResult = await pool.query(`SELECT COUNT(*) ${fromAndWhere}`, queryParams);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
         const totalPages = Math.ceil(totalItems / limit);
 
         const offset = (page - 1) * limit;
-        queryParams.push(limit);
-        queryParams.push(offset);
+        const pagination = ` LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+        queryParams.push(limit, offset);
         
-        baseQuery += ` LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`;
-
-        const menuItems = await fetchMenuItemsWithDetails(baseQuery, queryParams);
+        const menuItems = await fetchMenuItemsWithDetails(fromAndWhere + pagination, queryParams);
 
         res.json({
             status: 'success',
@@ -109,13 +106,13 @@ const getBarMenu = async (req, res, next) => {
             whereClauses.push(`(mi.name_th ILIKE $${queryParams.length} OR mi.name_en ILIKE $${queryParams.length})`);
         }
 
-        const baseQuery = `
+        const fromAndWhere = `
             FROM menu_items mi
             JOIN categories c ON mi.category_id = c.id
             WHERE ${whereClauses.join(' AND ')}
         `;
 
-        const menuItems = await fetchMenuItemsWithDetails(baseQuery, queryParams);
+        const menuItems = await fetchMenuItemsWithDetails(fromAndWhere, queryParams);
 
         res.json({
             status: 'success',
