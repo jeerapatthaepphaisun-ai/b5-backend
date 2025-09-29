@@ -2,7 +2,7 @@
 const pool = require('../db');
 const { validationResult } = require('express-validator');
 
-// GET /api/menu (ฉบับแก้ไขถูกต้อง)
+// GET /api/menu (ฉบับแก้ไขสมบูรณ์)
 const getMenu = async (req, res, next) => {
     try {
         const { category, search, page = 1, limit = 1000 } = req.query;
@@ -26,11 +26,11 @@ const getMenu = async (req, res, next) => {
         const totalResult = await pool.query(`SELECT COUNT(DISTINCT mi.id) FROM menu_items mi LEFT JOIN categories c ON mi.category_id = c.id ${whereString}`, queryParams);
         const totalItems = parseInt(totalResult.rows[0].count, 10);
         const totalPages = Math.ceil(totalItems / limit);
-        
+
         const offset = (page - 1) * limit;
         queryParams.push(limit);
         queryParams.push(offset);
-        
+
         // Query ที่ถูกต้องสมบูรณ์
         const menuQuery = `
             SELECT
@@ -38,18 +38,16 @@ const getMenu = async (req, res, next) => {
                 c.name_th as category_th,
                 c.name_en as category_en,
                 COALESCE(
-                    (SELECT json_agg(
-                        json_build_object(
-                            'option_set_id', os.id,
-                            'option_set_name_th', os.name_th,
-                            'options', COALESCE(
-                                (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id), 
-                                '[]'::json)
-                        ) ORDER BY os.created_at)
+                    (SELECT jsonb_object_agg(
+                        os.id,
+                        COALESCE(
+                            (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id),
+                            '[]'::json)
+                        )
                     FROM menu_item_option_sets mios
                     JOIN option_sets os ON mios.option_set_id = os.id
-                    WHERE mios.menu_item_id = mi.id), 
-                '[]'::json) as option_groups
+                    WHERE mios.menu_item_id = mi.id),
+                '{}'::jsonb) as option_groups
             FROM menu_items mi
             LEFT JOIN categories c ON mi.category_id = c.id
             ${whereString}
@@ -74,7 +72,7 @@ const getMenu = async (req, res, next) => {
     }
 };
 
-// GET /api/menu/bar (ฉบับแก้ไขถูกต้อง)
+// GET /api/menu/bar (ฉบับแก้ไขสมบูรณ์)
 const getBarMenu = async (req, res, next) => {
     try {
         const { search } = req.query;
@@ -85,7 +83,7 @@ const getBarMenu = async (req, res, next) => {
             queryParams.push(`%${search}%`);
             whereClauses.push(`(mi.name_th ILIKE $${queryParams.length} OR mi.name_en ILIKE $${queryParams.length})`);
         }
-        
+
         const whereString = `WHERE ${whereClauses.join(' AND ')}`;
 
         const menuQuery = `
@@ -94,18 +92,16 @@ const getBarMenu = async (req, res, next) => {
                 c.name_th as category_th,
                 c.name_en as category_en,
                 COALESCE(
-                    (SELECT json_agg(
-                        json_build_object(
-                            'option_set_id', os.id,
-                            'option_set_name_th', os.name_th,
-                            'options', COALESCE(
-                                (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id), 
-                                '[]'::json)
-                        ) ORDER BY os.created_at)
+                    (SELECT jsonb_object_agg(
+                        os.id,
+                        COALESCE(
+                            (SELECT json_agg(o.* ORDER BY o.created_at) FROM menu_options o WHERE o.option_set_id = os.id),
+                            '[]'::json)
+                        )
                     FROM menu_item_option_sets mios
                     JOIN option_sets os ON mios.option_set_id = os.id
-                    WHERE mios.menu_item_id = mi.id), 
-                '[]'::json) as option_groups
+                    WHERE mios.menu_item_id = mi.id),
+                '{}'::jsonb) as option_groups
             FROM menu_items mi
             JOIN categories c ON mi.category_id = c.id
             ${whereString}
@@ -133,7 +129,7 @@ const createMenuItem = async (req, res, next) => {
         if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
         const { name_th, price, category_id, name_en, desc_th, desc_en, name_km, name_zh, desc_km, desc_zh, image_url, stock_status, discount_percentage, current_stock, manage_stock } = req.body;
-        
+
         const query = `
             INSERT INTO menu_items (name_th, price, category_id, name_en, desc_th, desc_en, name_km, name_zh, desc_km, desc_zh, image_url, stock_status, discount_percentage, current_stock, manage_stock)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *;
@@ -189,11 +185,11 @@ const updateMenuItem = async (req, res, next) => {
 
         let finalStockStatus = stock_status;
         if (manage_stock && current_stock > 0) finalStockStatus = 'in_stock';
-        
+
         const query = `
             UPDATE menu_items
-            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6, 
-                name_km = $7, name_zh = $8, desc_km = $9, desc_zh = $10, 
+            SET name_th = $1, price = $2, category_id = $3, name_en = $4, desc_th = $5, desc_en = $6,
+                name_km = $7, name_zh = $8, desc_km = $9, desc_zh = $10,
                 image_url = $11, stock_status = $12, discount_percentage = $13, current_stock = $14, manage_stock = $15
             WHERE id = $16 RETURNING *;
         `;
@@ -270,8 +266,8 @@ const updateItemStock = async (req, res, next) => {
 const getStockAlerts = async (req, res, next) => {
     try {
         const result = await pool.query(
-            `SELECT id, name_th, current_stock FROM menu_items 
-             WHERE manage_stock = true AND stock_status = 'in_stock' AND current_stock < 10 
+            `SELECT id, name_th, current_stock FROM menu_items
+             WHERE manage_stock = true AND stock_status = 'in_stock' AND current_stock < 10
              ORDER BY current_stock ASC`
         );
         res.json({ status: 'success', data: result.rows });
