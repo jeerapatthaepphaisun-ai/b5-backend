@@ -13,8 +13,6 @@ const getFilteredOrdersByStation = async (station) => {
         return [];
     }
 
-    // --- ✨ START: โค้ดที่ปรับปรุงใหม่ ---
-    // เพิ่มเงื่อนไขให้ดึงออเดอร์ที่ 'Paid' แต่ยังทำไม่เสร็จจาก Station นี้มาแสดงด้วย
     const query = `
         SELECT * FROM orders 
         WHERE 
@@ -24,13 +22,10 @@ const getFilteredOrdersByStation = async (station) => {
         ORDER BY created_at ASC;
     `;
     const result = await pool.query(query, [JSON.stringify(station)]);
-    // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
 
     const filteredOrders = result.rows.map(order => {
-        // กรองเฉพาะ item ที่เกี่ยวข้องกับ station นี้
         const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
         if (relevantItems.length > 0) {
-             // ถ้าออเดอร์เป็น Paid แต่ station นี้ทำเสร็จแล้ว ก็ไม่ต้องแสดง
             if (order.status === 'Paid' && order.completed_stations.includes(station)) {
                 return null;
             }
@@ -175,8 +170,9 @@ const createOrder = async (req, res, next) => {
             finalStatus = 'Pending';
         }
 
-        const query = `INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;`;
+        const query = `INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by, completed_stations) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '[]') RETURNING *;`;
         const values = [finalTableName, JSON.stringify(finalCartForStorage), subtotal, discountPercentage, discountAmount, finalTotal, specialRequest || '', finalStatus, isTakeaway, discountedByUser];
+        
         const result = await client.query(query, values);
 
         await client.query('COMMIT');
