@@ -27,10 +27,10 @@ const getFilteredOrdersByStation = async (station) => {
     // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
 
     const filteredOrders = result.rows.map(order => {
-        // กรองเฉพาะ item ที่เกี่ยวข้องกับ station นี้ และยังไม่เสร็จ
+        // กรองเฉพาะ item ที่เกี่ยวข้องกับ station นี้
         const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
         if (relevantItems.length > 0) {
-            // เช็คว่าถ้า status เป็น Paid แต่ station นี้ทำเสร็จแล้วหรือยัง
+             // ถ้าออเดอร์เป็น Paid แต่ station นี้ทำเสร็จแล้ว ก็ไม่ต้องแสดง
             if (order.status === 'Paid' && order.completed_stations.includes(station)) {
                 return null;
             }
@@ -98,7 +98,6 @@ const createOrder = async (req, res, next) => {
         const finalCartForStorage = []; 
 
         for (const itemInCart of cart) {
-            // --- ✨ START: โค้ดที่ปรับปรุงใหม่ (เพิ่ม c.station_type) ---
             const itemResult = await client.query(
                 `SELECT mi.*, c.name_th as category_th, c.name_en as category_en, c.name_km as category_km, c.name_zh as category_zh, c.station_type
                  FROM menu_items mi
@@ -107,7 +106,6 @@ const createOrder = async (req, res, next) => {
                  FOR UPDATE OF mi`,
                 [itemInCart.id]
             );
-            // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
 
             if (itemResult.rows.length === 0) throw new Error(`Item with ID ${itemInCart.id} not found.`);
             const dbItem = itemResult.rows[0];
@@ -139,12 +137,11 @@ const createOrder = async (req, res, next) => {
                 }
             }
             
-            // --- ✨ START: โค้ดที่ปรับปรุงใหม่ (เพิ่ม station_type) ---
             const fullItemData = {
                 id: dbItem.id,
                 name_th: dbItem.name_th, name_en: dbItem.name_en, name_km: dbItem.name_km, name_zh: dbItem.name_zh,
                 category_th: dbItem.category_th, category_en: dbItem.category_en, category_km: dbItem.category_km, category_zh: dbItem.category_zh,
-                station_type: dbItem.station_type, // เพิ่ม station_type เข้าไป
+                station_type: dbItem.station_type,
                 price: parseFloat(itemInCart.price),
                 quantity: itemInCart.quantity,
                 selected_options: itemInCart.selected_options || [],
@@ -153,7 +150,6 @@ const createOrder = async (req, res, next) => {
                 selected_options_text_km: selectedOptionsText.km,
                 selected_options_text_zh: selectedOptionsText.zh,
             };
-            // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
             
             finalCartForStorage.push(fullItemData);
 
@@ -171,7 +167,6 @@ const createOrder = async (req, res, next) => {
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
         
-        // --- ✨ START: โค้ดที่ปรับปรุงใหม่ (Logic การกำหนดสถานะ) ---
         let finalStatus;
         if (orderSource === 'bar') {
             const hasKitchenItems = finalCartForStorage.some(item => item.station_type === 'kitchen');
@@ -179,7 +174,6 @@ const createOrder = async (req, res, next) => {
         } else {
             finalStatus = 'Pending';
         }
-        // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
 
         const query = `INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;`;
         const values = [finalTableName, JSON.stringify(finalCartForStorage), subtotal, discountPercentage, discountAmount, finalTotal, specialRequest || '', finalStatus, isTakeaway, discountedByUser];
