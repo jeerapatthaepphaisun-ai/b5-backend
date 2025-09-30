@@ -2,7 +2,7 @@
 const { validationResult } = require('express-validator'); 
 const pool = require('../db');
 
-// --- ฟังก์ชัน Helper กลางสำหรับดึงออเดอร์ตาม Station ---
+// --- ฟังก์ชัน Helper กลางสำหรับดึงออเดอร์ตาม Station (ฉบับแก้ไข) ---
 const getFilteredOrdersByStation = async (station) => {
     if (!station) {
         throw new Error('กรุณาระบุ station (kitchen หรือ bar)');
@@ -12,15 +12,33 @@ const getFilteredOrdersByStation = async (station) => {
     if (targetCategories.length === 0) {
         return [];
     }
-    const query = `SELECT * FROM orders WHERE status IN ('Pending', 'Cooking', 'Preparing') ORDER BY created_at ASC;`;
-    const result = await pool.query(query);
+
+    // --- ✨ START: โค้ดที่ปรับปรุงใหม่ ---
+    // เพิ่มเงื่อนไขให้ดึงออเดอร์ที่ 'Paid' แต่ยังทำไม่เสร็จจาก Station นี้มาแสดงด้วย
+    const query = `
+        SELECT * FROM orders 
+        WHERE 
+            status IN ('Pending', 'Cooking', 'Preparing')
+            OR
+            (status = 'Paid' AND NOT (completed_stations @> $1::jsonb))
+        ORDER BY created_at ASC;
+    `;
+    const result = await pool.query(query, [JSON.stringify(station)]);
+    // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
+
     const filteredOrders = result.rows.map(order => {
+        // กรองเฉพาะ item ที่เกี่ยวข้องกับ station นี้ และยังไม่เสร็จ
         const relevantItems = order.items.filter(item => targetCategories.includes(item.category_th));
         if (relevantItems.length > 0) {
+            // เช็คว่าถ้า status เป็น Paid แต่ station นี้ทำเสร็จแล้วหรือยัง
+            if (order.status === 'Paid' && order.completed_stations.includes(station)) {
+                return null;
+            }
             return { ...order, items: relevantItems };
         }
         return null;
     }).filter(Boolean);
+
     return filteredOrders;
 };
 
@@ -32,7 +50,6 @@ const createOrder = async (req, res, next) => {
         return res.status(400).json({ status: 'error', errors: errors.array() });
     }
 
-    console.log("Received cart data:", JSON.stringify(req.body.cart, null, 2));
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -81,14 +98,16 @@ const createOrder = async (req, res, next) => {
         const finalCartForStorage = []; 
 
         for (const itemInCart of cart) {
+            // --- ✨ START: โค้ดที่ปรับปรุงใหม่ (เพิ่ม c.station_type) ---
             const itemResult = await client.query(
-                `SELECT mi.*, c.name_th as category_th, c.name_en as category_en, c.name_km as category_km, c.name_zh as category_zh 
+                `SELECT mi.*, c.name_th as category_th, c.name_en as category_en, c.name_km as category_km, c.name_zh as category_zh, c.station_type
                  FROM menu_items mi
                  LEFT JOIN categories c ON mi.category_id = c.id
                  WHERE mi.id = $1
                  FOR UPDATE OF mi`,
                 [itemInCart.id]
             );
+            // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
 
             if (itemResult.rows.length === 0) throw new Error(`Item with ID ${itemInCart.id} not found.`);
             const dbItem = itemResult.rows[0];
@@ -119,11 +138,13 @@ const createOrder = async (req, res, next) => {
                     selectedOptionsText.zh = optionsResult.rows.map(o => o.label_zh).filter(Boolean).join(', ');
                 }
             }
-
+            
+            // --- ✨ START: โค้ดที่ปรับปรุงใหม่ (เพิ่ม station_type) ---
             const fullItemData = {
                 id: dbItem.id,
                 name_th: dbItem.name_th, name_en: dbItem.name_en, name_km: dbItem.name_km, name_zh: dbItem.name_zh,
                 category_th: dbItem.category_th, category_en: dbItem.category_en, category_km: dbItem.category_km, category_zh: dbItem.category_zh,
+                station_type: dbItem.station_type, // เพิ่ม station_type เข้าไป
                 price: parseFloat(itemInCart.price),
                 quantity: itemInCart.quantity,
                 selected_options: itemInCart.selected_options || [],
@@ -132,6 +153,7 @@ const createOrder = async (req, res, next) => {
                 selected_options_text_km: selectedOptionsText.km,
                 selected_options_text_zh: selectedOptionsText.zh,
             };
+            // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
             
             finalCartForStorage.push(fullItemData);
 
@@ -149,7 +171,15 @@ const createOrder = async (req, res, next) => {
         const discountAmount = subtotal * (discountPercentage / 100);
         const finalTotal = subtotal - discountAmount;
         
-        const finalStatus = (orderSource === 'bar') ? 'Paid' : 'Pending';
+        // --- ✨ START: โค้ดที่ปรับปรุงใหม่ (Logic การกำหนดสถานะ) ---
+        let finalStatus;
+        if (orderSource === 'bar') {
+            const hasKitchenItems = finalCartForStorage.some(item => item.station_type === 'kitchen');
+            finalStatus = hasKitchenItems ? 'Pending' : 'Paid';
+        } else {
+            finalStatus = 'Pending';
+        }
+        // --- ✨ END: โค้ดที่ปรับปรุงใหม่ ---
 
         const query = `INSERT INTO orders (table_name, items, subtotal, discount_percentage, discount_amount, total, special_request, status, is_takeaway, discount_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;`;
         const values = [finalTableName, JSON.stringify(finalCartForStorage), subtotal, discountPercentage, discountAmount, finalTotal, specialRequest || '', finalStatus, isTakeaway, discountedByUser];
@@ -221,7 +251,7 @@ const updateOrderStatus = async (req, res, next) => {
         const requiredStations = categoriesResult.rows.map(row => row.station_type);
         const allStationsCompleted = requiredStations.every(reqStation => updatedOrder.completed_stations.includes(reqStation));
 
-        if (allStationsCompleted) {
+        if (allStationsCompleted && updatedOrder.status !== 'Paid') {
             const finalResult = await client.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', ['Serving', orderId]);
             req.broadcast({ type: 'orderStatusUpdate', order: finalResult.rows[0] });
             await client.query('COMMIT');
