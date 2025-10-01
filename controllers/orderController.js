@@ -2,7 +2,7 @@
 const { validationResult } = require('express-validator'); 
 const pool = require('../db');
 
-// --- ฟังก์ชัน Helper กลางสำหรับดึงออเดอร์ตาม Station (ฉบับแก้ไข) ---
+// --- ฟังก์ชัน Helper กลางสำหรับดึงออเดอร์ตาม Station (ฉบับแก้ไขล่าสุด) ---
 const getFilteredOrdersByStation = async (station) => {
     if (!station) {
         throw new Error('กรุณาระบุ station (kitchen หรือ bar)');
@@ -13,10 +13,11 @@ const getFilteredOrdersByStation = async (station) => {
         return [];
     }
 
+    // FIX #1: เพิ่ม AND NOT (completed_stations @> $1::jsonb) เพื่อไม่ให้ดึงออเดอร์ที่ station นี้ทำเสร็จแล้วกลับมาอีก
     const query = `
         SELECT * FROM orders 
         WHERE 
-            status IN ('Pending', 'Cooking', 'Preparing')
+            (status IN ('Pending', 'Cooking', 'Preparing') AND NOT (completed_stations @> $1::jsonb))
             OR
             (status = 'Paid' AND NOT (completed_stations @> $1::jsonb))
         ORDER BY created_at ASC;
@@ -211,6 +212,30 @@ const updateOrderStatus = async (req, res, next) => {
         await client.query('BEGIN');
         const { orderId, newStatus, station } = req.body;
 
+        // ดึงสถานะปัจจุบันของออเดอร์ขึ้นมาก่อน
+        const currentOrderResult = await client.query('SELECT status FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+        if (currentOrderResult.rowCount === 0) {
+            await client.query('ROLLBACK');
+            client.release();
+            return res.status(404).json({ status: 'error', message: 'Order not found' });
+        }
+        const currentStatus = currentOrderResult.rows[0].status;
+
+        // FIX #2: Logic ใหม่สำหรับจัดการออเดอร์จาก Bar POS
+        // ถ้าสถานะปัจจุบันคือ 'Paid' และ KDS กด 'Serving' (เสร็จแล้ว)
+        // ให้เปลี่ยนสถานะไปเป็น 'Fulfilled' (เสร็จสมบูรณ์) แล้วจบการทำงานทันที
+        if (currentStatus === 'Paid' && newStatus === 'Serving') {
+            const finalResult = await client.query(
+                "UPDATE orders SET status = 'Fulfilled', completed_stations = completed_stations || $1::jsonb WHERE id = $2 RETURNING *",
+                [JSON.stringify(station), orderId]
+            );
+            await client.query('COMMIT');
+            client.release();
+            req.broadcast({ type: 'orderStatusUpdate', order: finalResult.rows[0] });
+            return res.json({ status: 'success', data: finalResult.rows[0] });
+        }
+
+        // --- Logic เดิมสำหรับสถานะอื่นๆ ---
         if (newStatus !== 'Serving') {
             let updateQuery = 'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *';
             const queryParams = [newStatus, orderId];
@@ -222,9 +247,14 @@ const updateOrderStatus = async (req, res, next) => {
             
             const result = await client.query(updateQuery, queryParams);
             
-            if (result.rowCount === 0) return res.status(404).json({ status: 'error', message: 'Order not found' });
+            if (result.rowCount === 0) { // Redundant check but safe
+                await client.query('ROLLBACK');
+                client.release();
+                return res.status(404).json({ status: 'error', message: 'Order not found' });
+            }
             req.broadcast({ type: 'orderStatusUpdate', order: result.rows[0] });
             await client.query('COMMIT');
+            client.release();
             return res.json({ status: 'success', data: result.rows[0] });
         }
 
@@ -232,6 +262,7 @@ const updateOrderStatus = async (req, res, next) => {
         if (updateStationResult.rowCount === 0) {
             const currentOrder = await client.query('SELECT * FROM orders WHERE id = $1', [orderId]);
             await client.query('COMMIT');
+            client.release();
             return res.json({ status: 'success', data: currentOrder.rows[0] });
         }
 
@@ -245,6 +276,7 @@ const updateOrderStatus = async (req, res, next) => {
             const finalResult = await client.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', ['Serving', orderId]);
             req.broadcast({ type: 'orderStatusUpdate', order: finalResult.rows[0] });
             await client.query('COMMIT');
+            client.release();
             return res.json({ status: 'success', data: finalResult.rows[0] });
         }
 
@@ -256,7 +288,10 @@ const updateOrderStatus = async (req, res, next) => {
         await client.query('ROLLBACK');
         next(error);
     } finally {
-        client.release();
+        // Ensure client is always released
+        if (client && client.release) {
+            client.release();
+        }
     }
 };
 
@@ -285,7 +320,7 @@ const undoPayment = async (req, res, next) => {
 
         const recentPaidOrdersResult = await client.query(
             `SELECT id FROM orders 
-             WHERE table_name = $1 AND status = 'Paid' 
+             WHERE table_name = $1 AND (status = 'Paid' OR status = 'Fulfilled')
              AND updated_at >= NOW() - INTERVAL '2 minutes'
              ORDER BY updated_at DESC`,
             [tableName]
